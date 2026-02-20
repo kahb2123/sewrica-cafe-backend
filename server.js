@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const path = require('path');
+const fs = require('fs');
 
 dotenv.config();
 
@@ -10,18 +11,17 @@ const app = express();
 
 // Middleware
 app.use(cors({
-  origin: 'http://localhost:5173',
+  origin: true, // This allows any origin in development
   credentials: true
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ✅ IMPORTANT: Serve static files from uploads folder
-// This MUST be before your routes
+// Serve static files
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI)
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/sewrica_cafe')
   .then(() => {
     console.log('✅ MongoDB Connected: localhost');
     console.log('📊 Database Name: sewrica_cafe');
@@ -31,22 +31,42 @@ mongoose.connect(process.env.MONGODB_URI)
     process.exit(1);
   });
 
-// Routes
-app.use('/api/auth', require('./src/routes/authRoutes'));
-app.use('/api/menu', require('./src/routes/menuRoutes'));
+// Import routes
+const authRoutes = require('./src/routes/authRoutes');
+const menuRoutes = require('./src/routes/menuRoutes');
+const adminRoutes = require('./src/routes/adminRoutes');
+const orderRoutes = require('./src/routes/orderRoutes');
+const paymentRoutes = require('./src/routes/paymentRoutes');
+// ✅ ADD THIS LINE - Import setup routes
+const setupRoutes = require('./src/routes/setup');
 
-// Test route to check if server is running
+// Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/menu', menuRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/orders', orderRoutes);
+app.use('/api/payments', paymentRoutes);
+// ✅ ADD THIS LINE - Use setup routes
+app.use('/api/setup', setupRoutes);
+
+// Test route
 app.get('/', (req, res) => {
   res.json({ 
     message: 'Welcome to SEWRICA Cafe API',
     status: 'running',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      auth: '/api/auth',
+      menu: '/api/menu',
+      orders: '/api/orders',
+      admin: '/api/admin',
+      setup: '/api/setup' // ✅ Added setup to endpoints
+    }
   });
 });
 
-// Test route for images
+// Test uploads route
 app.get('/test-uploads', (req, res) => {
-  const fs = require('fs');
   const uploadsDir = path.join(__dirname, 'uploads');
   
   fs.readdir(uploadsDir, (err, files) => {
@@ -61,11 +81,37 @@ app.get('/test-uploads', (req, res) => {
   });
 });
 
-// 404 handler - This should be LAST
+// Health check
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    uploads: fs.existsSync(path.join(__dirname, 'uploads'))
+  });
+});
+
+// Create uploads folder if it doesn't exist
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  console.log('📁 Created uploads folder');
+}
+
+// 404 handler
 app.use((req, res) => {
   res.status(404).json({ 
     message: 'Route not found',
     path: req.originalUrl
+  });
+});
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Server error:', err);
+  res.status(500).json({
+    message: 'Internal server error',
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined
   });
 });
 
@@ -74,14 +120,31 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📁 Uploads folder: ${path.join(__dirname, 'uploads')}`);
   
-  // Check if uploads folder exists
-  const fs = require('fs');
-  const uploadsDir = path.join(__dirname, 'uploads');
   if (fs.existsSync(uploadsDir)) {
     const files = fs.readdirSync(uploadsDir);
     console.log(`📸 Images in uploads: ${files.length} files`);
     files.slice(0, 5).forEach(f => console.log(`   - ${f}`));
-  } else {
-    console.log('❌ Uploads folder does not exist!');
   }
+  
+  console.log('\n📡 Available API endpoints:');
+  console.log('   GET  /                    - API Info');
+  console.log('   GET  /api/health           - Health check');
+  console.log('   POST /api/auth/register    - Register');
+  console.log('   POST /api/auth/login       - Login');
+  console.log('   GET  /api/menu              - Get menu items');
+  console.log('   POST /api/menu              - Create menu item (admin)');
+  console.log('   POST /api/orders            - Create new order');
+  console.log('   GET  /api/orders/my-orders  - Get user orders');
+  console.log('   GET  /api/orders/:id        - Get single order');
+  console.log('   PATCH/api/orders/:id/cancel - Cancel order');
+  console.log('   PATCH/api/orders/:id/status - Update order status (staff)');
+  console.log('   POST /api/payments/create-payment-intent - Create Stripe payment intent');
+  console.log('   POST /api/payments/webhook - Stripe webhook');
+  console.log('   GET  /api/payments/payment-methods - Get saved payment methods');
+  console.log('   POST /api/payments/cash-payment - Process cash payment');
+  console.log('   GET  /api/admin/stats       - Admin stats');
+  console.log('   GET  /api/admin/orders      - Get all orders');
+  console.log('   GET  /api/admin/users       - Get all users');
+  console.log('   GET  /api/admin/reports/daily - Daily reports');
+  console.log('   ✅ GET  /api/setup/create-admin - Create admin user (ONE-TIME)');
 });

@@ -49,14 +49,18 @@ const orderSchema = new mongoose.Schema({
   },
   paymentStatus: {
     type: String,
-    enum: ['pending', 'paid', 'failed'],
+    enum: ['pending', 'processing', 'completed', 'failed', 'refunded'],
     default: 'pending'
   },
   paymentMethod: {
     type: String,
-    enum: ['cash', 'tele_birr', 'bank'],
+    enum: ['cash', 'card', 'tele_birr', 'bank'],
     required: true
   },
+  stripePaymentIntentId: String,
+  amountReceived: Number, // For cash payments
+  change: Number, // For cash payments
+  paidAt: Date,
   deliveryMethod: {
     type: String,
     enum: ['delivery', 'pickup'],

@@ -15,15 +15,19 @@ const protect = async (req, res, next) => {
       // Get user from token (exclude password)
       req.user = await User.findById(decoded.id).select('-password');
 
+      if (!req.user) {
+        return res.status(401).json({ message: 'User not found' });
+      }
+
       next();
     } catch (error) {
-      console.error(error);
-      res.status(401).json({ message: 'Not authorized' });
+      console.error('Auth error:', error);
+      return res.status(401).json({ message: 'Not authorized, token failed' });
     }
   }
 
   if (!token) {
-    res.status(401).json({ message: 'Not authorized, no token' });
+    return res.status(401).json({ message: 'Not authorized, no token' });
   }
 };
 
@@ -43,4 +47,33 @@ const authorize = (...roles) => {
   };
 };
 
-module.exports = { protect, authorize };
+// Admin only middleware (convenience wrapper)
+const adminOnly = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ message: 'Not authorized' });
+  }
+  
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ 
+      message: 'Admin access required' 
+    });
+  }
+  next();
+};
+
+// Optional: Check if user is admin or the resource owner
+const isAdminOrOwner = (resourceUserId) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ message: 'Not authorized' });
+    }
+    
+    if (req.user.role === 'admin' || req.user.id.toString() === resourceUserId.toString()) {
+      return next();
+    }
+    
+    return res.status(403).json({ message: 'Not authorized to access this resource' });
+  };
+};
+
+module.exports = { protect, authorize, adminOnly, isAdminOrOwner };
