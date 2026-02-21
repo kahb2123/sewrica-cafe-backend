@@ -37,7 +37,7 @@ const menuRoutes = require('./src/routes/menuRoutes');
 const adminRoutes = require('./src/routes/adminRoutes');
 const orderRoutes = require('./src/routes/orderRoutes');
 const paymentRoutes = require('./src/routes/paymentRoutes');
-// ✅ ADD THIS LINE - Import setup routes
+const staffRoutes = require('./src/routes/staffRoutes'); // ✅ Staff routes
 const setupRoutes = require('./src/routes/setup');
 
 // Routes
@@ -46,7 +46,7 @@ app.use('/api/menu', menuRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/payments', paymentRoutes);
-// ✅ ADD THIS LINE - Use setup routes
+app.use('/api/staff', staffRoutes); // ✅ Add staff routes
 app.use('/api/setup', setupRoutes);
 
 // Test route
@@ -60,7 +60,8 @@ app.get('/', (req, res) => {
       menu: '/api/menu',
       orders: '/api/orders',
       admin: '/api/admin',
-      setup: '/api/setup' // ✅ Added setup to endpoints
+      staff: '/api/staff', // ✅ Added staff to endpoints
+      setup: '/api/setup'
     }
   });
 });
@@ -129,22 +130,59 @@ app.listen(PORT, () => {
   console.log('\n📡 Available API endpoints:');
   console.log('   GET  /                    - API Info');
   console.log('   GET  /api/health           - Health check');
+  
+  // Auth endpoints
+  console.log('\n🔐 AUTH ENDPOINTS:');
   console.log('   POST /api/auth/register    - Register');
   console.log('   POST /api/auth/login       - Login');
+  console.log('   GET  /api/auth/profile     - Get profile');
+  
+  // Menu endpoints
+  console.log('\n🍽️ MENU ENDPOINTS:');
   console.log('   GET  /api/menu              - Get menu items');
   console.log('   POST /api/menu              - Create menu item (admin)');
+  console.log('   PUT  /api/menu/:id          - Update menu item (admin)');
+  console.log('   DELETE /api/menu/:id        - Delete menu item (admin)');
+  
+  // Order endpoints
+  console.log('\n📦 ORDER ENDPOINTS:');
   console.log('   POST /api/orders            - Create new order');
   console.log('   GET  /api/orders/my-orders  - Get user orders');
   console.log('   GET  /api/orders/:id        - Get single order');
-  console.log('   PATCH/api/orders/:id/cancel - Cancel order');
-  console.log('   PATCH/api/orders/:id/status - Update order status (staff)');
+  console.log('   PATCH /api/orders/:id/cancel - Cancel order');
+  console.log('   PATCH /api/orders/:id/status - Update order status (staff)');
+  
+  // Payment endpoints
+  console.log('\n💰 PAYMENT ENDPOINTS:');
   console.log('   POST /api/payments/create-payment-intent - Create Stripe payment intent');
   console.log('   POST /api/payments/webhook - Stripe webhook');
   console.log('   GET  /api/payments/payment-methods - Get saved payment methods');
   console.log('   POST /api/payments/cash-payment - Process cash payment');
+  
+  // Admin endpoints
+  console.log('\n👑 ADMIN ENDPOINTS:');
   console.log('   GET  /api/admin/stats       - Admin stats');
   console.log('   GET  /api/admin/orders      - Get all orders');
   console.log('   GET  /api/admin/users       - Get all users');
   console.log('   GET  /api/admin/reports/daily - Daily reports');
+  
+  // ✅ NEW STAFF ENDPOINTS
+  console.log('\n👨‍🍳 STAFF MANAGEMENT ENDPOINTS:');
+  console.log('   GET  /api/staff/:role        - Get staff by role (cook/delivery/cashier)');
+  console.log('   POST /api/staff/assign-chef/:orderId - Assign order to chef');
+  console.log('   POST /api/staff/assign-delivery/:orderId - Assign order to delivery');
+  console.log('   POST /api/staff/start-cooking/:orderId - Chef starts cooking');
+  console.log('   POST /api/staff/complete-cooking/:orderId - Chef completes cooking');
+  console.log('   POST /api/staff/start-delivery/:orderId - Delivery starts');
+  console.log('   POST /api/staff/complete-delivery/:orderId - Delivery completes');
+  
+  // Staff Reports
+  console.log('\n📊 STAFF REPORTS:');
+  console.log('   GET  /api/staff/reports/summary - Staff performance summary');
+  console.log('   GET  /api/staff/reports/chef/:chefId - Chef performance report');
+  console.log('   GET  /api/staff/reports/delivery/:deliveryId - Delivery report');
+  
+  // Setup
+  console.log('\n⚙️ SETUP:');
   console.log('   ✅ GET  /api/setup/create-admin - Create admin user (ONE-TIME)');
 });
