@@ -291,7 +291,7 @@ const toggleAvailability = async (req, res) => {
 // @access  Public
 const getAllCategories = async (req, res) => {
   try {
-    const categories = await MenuItem.distinct('category');
+    const categories = await MenuItem.distinct('category', {}, { maxTimeMS: 30000 });
     
     res.json({
       success: true,
