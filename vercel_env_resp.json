@@ -1,0 +1,1 @@
+{"error":{"code":"ENV_ALREADY_EXISTS","message":"Another Environment Variable with the same Name and Environment exists in your project. Remove it or choose a different Name or Environment.","key":"VITE_API_URL","configurationId":null,"target":["production","preview","development"]}}
