@@ -69,7 +69,7 @@ router.get('/create-test-menu', async (req, res) => {
     const baseItem = {
       name: 'Sample Item',
       price: 100,
-      available: true
+      isAvailable: true
     };
     
     // Add required fields with sensible defaults
