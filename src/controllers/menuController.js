@@ -183,81 +183,6 @@ const createMenuItem = async (req, res) => {
 // @desc    Update menu item
 // @route   PUT /api/menu/:id
 // @access  Private/Admin
-// const updateMenuItem = async (req, res) => {
-//   try {
-//     let menuItem = await MenuItem.findById(req.params.id);
-    
-//     if (!menuItem) {
-//       return res.status(404).json({
-//         success: false,
-//         message: 'Menu item not found'
-//       });
-//     }
-
-//     // Parse boolean values
-//     const parseBoolean = (value) => {
-//       if (value === 'true') return true;
-//       if (value === 'false') return false;
-//       return !!value;
-//     };
-
-//     // Handle image update
-//     if (req.file) {
-//       // Delete old image if not default
-//       if (menuItem.image && menuItem.image !== 'default-food.jpg') {
-//         const oldImagePath = path.join(__dirname, '../../uploads', menuItem.image);
-//         if (fs.existsSync(oldImagePath)) {
-//           fs.unlinkSync(oldImagePath);
-//           console.log('✅ Deleted old image:', menuItem.image);
-//         }
-//       }
-//       req.body.image = req.file.filename;
-//       console.log('✅ Updated with new image:', req.file.filename);
-//     }
-
-//     // Parse ingredients if provided
-//     if (req.body.ingredients) {
-//       req.body.ingredients = typeof req.body.ingredients === 'string' 
-//         ? req.body.ingredients.split(',').map(i => i.trim()) 
-//         : req.body.ingredients;
-//     }
-
-//     // Parse boolean fields
-//     ['isVegetarian', 'isSpicy', 'isPopular', 'isSignature', 'isAvailable'].forEach(field => {
-//       if (req.body[field] !== undefined) {
-//         req.body[field] = parseBoolean(req.body[field]);
-//       }
-//     });
-
-//     // Parse price to number
-//     if (req.body.price) {
-//       req.body.price = Number(req.body.price);
-//     }
-
-//     menuItem = await MenuItem.findByIdAndUpdate(
-//       req.params.id,
-//       req.body,
-//       { new: true, runValidators: true }
-//     );
-
-//     console.log('✅ Menu item updated, image:', menuItem.image);
-
-//     res.json({
-//       success: true,
-//       data: menuItem
-//     });
-//   } catch (error) {
-//     console.error('❌ Error updating menu item:', error);
-//     res.status(500).json({
-//       success: false,
-//       message: error.message
-//     });
-//   }
-// };
-
-// @desc    Update menu item
-// @route   PUT /api/menu/:id
-// @access  Private/Admin
 const updateMenuItem = async (req, res) => {
   try {
     let menuItem = await MenuItem.findById(req.params.id);
@@ -269,27 +194,38 @@ const updateMenuItem = async (req, res) => {
       });
     }
 
+    // Parse boolean values
+    const parseBoolean = (value) => {
+      if (value === 'true') return true;
+      if (value === 'false') return false;
+      return !!value;
+    };
+
     // Handle image update
     if (req.file) {
       // Delete old image if not default
-      if (menuItem.image !== 'default-food.jpg') {
+      if (menuItem.image && menuItem.image !== 'default-food.jpg') {
         const oldImagePath = path.join(__dirname, '../../uploads', menuItem.image);
         if (fs.existsSync(oldImagePath)) {
           fs.unlinkSync(oldImagePath);
+          console.log('✅ Deleted old image:', menuItem.image);
         }
       }
       req.body.image = req.file.filename;
+      console.log('✅ Updated with new image:', req.file.filename);
     }
 
     // Parse ingredients if provided
     if (req.body.ingredients) {
-      req.body.ingredients = req.body.ingredients.split(',').map(i => i.trim());
+      req.body.ingredients = typeof req.body.ingredients === 'string' 
+        ? req.body.ingredients.split(',').map(i => i.trim()) 
+        : req.body.ingredients;
     }
 
     // Parse boolean fields
     ['isVegetarian', 'isSpicy', 'isPopular', 'isSignature', 'isAvailable'].forEach(field => {
       if (req.body[field] !== undefined) {
-        req.body[field] = req.body[field] === 'true';
+        req.body[field] = parseBoolean(req.body[field]);
       }
     });
 
@@ -304,17 +240,81 @@ const updateMenuItem = async (req, res) => {
       { new: true, runValidators: true }
     );
 
+    console.log('✅ Menu item updated, image:', menuItem.image);
+
     res.json({
       success: true,
       data: menuItem
     });
   } catch (error) {
+    console.error('❌ Error updating menu item:', error);
     res.status(500).json({
       success: false,
       message: error.message
     });
   }
 };
+
+// @desc    Update menu item
+// @route   PUT /api/menu/:id
+// @access  Private/Admin
+// const updateMenuItem = async (req, res) => {
+//   try {
+//     let menuItem = await MenuItem.findById(req.params.id);
+    
+//     if (!menuItem) {
+//       return res.status(404).json({
+//         success: false,
+//         message: 'Menu item not found'
+//       });
+//     }
+
+//     // Handle image update
+//     if (req.file) {
+//       // Delete old image if not default
+//       if (menuItem.image !== 'default-food.jpg') {
+//         const oldImagePath = path.join(__dirname, '../../uploads', menuItem.image);
+//         if (fs.existsSync(oldImagePath)) {
+//           fs.unlinkSync(oldImagePath);
+//         }
+//       }
+//       req.body.image = req.file.filename;
+//     }
+
+//     // Parse ingredients if provided
+//     if (req.body.ingredients) {
+//       req.body.ingredients = req.body.ingredients.split(',').map(i => i.trim());
+//     }
+
+//     // Parse boolean fields
+//     ['isVegetarian', 'isSpicy', 'isPopular', 'isSignature', 'isAvailable'].forEach(field => {
+//       if (req.body[field] !== undefined) {
+//         req.body[field] = req.body[field] === 'true';
+//       }
+//     });
+
+//     // Parse price to number
+//     if (req.body.price) {
+//       req.body.price = Number(req.body.price);
+//     }
+
+//     menuItem = await MenuItem.findByIdAndUpdate(
+//       req.params.id,
+//       req.body,
+//       { new: true, runValidators: true }
+//     );
+
+//     res.json({
+//       success: true,
+//       data: menuItem
+//     });
+//   } catch (error) {
+//     res.status(500).json({
+//       success: false,
+//       message: error.message
+//     });
+//   }
+// };
 
 // @desc    Delete menu item
 // @route   DELETE /api/menu/:id
