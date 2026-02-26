@@ -108,11 +108,27 @@ const getMenuItemsByCategory = async (req, res) => {
 // @access  Private/Admin
 const createMenuItem = async (req, res) => {
   try {
-    const { 
-      name, nameAm, description, fullDescription, price, 
+    // Log incoming request info for debugging
+    console.log('\n[createMenuItem] headers:', req.headers['content-type']);
+    console.log('[createMenuItem] file:', !!req.file, req.file && req.file.filename);
+    console.log('[createMenuItem] body keys:', Object.keys(req.body));
+
+    let {
+      name, nameAm, description, fullDescription, price,
       category, spiceLevel, prepTime, calories, isVegetarian,
       isSpicy, isPopular, isSignature, ingredients, greekText
     } = req.body;
+
+    // Parse boolean values (they come as strings from FormData)
+    const parseBoolean = (value) => {
+      if (value === 'true') return true;
+      if (value === 'false') return false;
+      return !!value;
+    };
+
+    // Provide server-side defaults if frontend didn't send them
+    if (!nameAm || nameAm === '') nameAm = name || '';
+    if (!fullDescription || fullDescription === '') fullDescription = description || '';
 
     // Check if item already exists
     const itemExists = await MenuItem.findOne({ name });
@@ -127,6 +143,7 @@ const createMenuItem = async (req, res) => {
     let imagePath = 'default-food.jpg';
     if (req.file) {
       imagePath = req.file.filename;
+      console.log('✅ Image saved as:', imagePath);
     }
 
     const menuItem = await MenuItem.create({
@@ -140,19 +157,97 @@ const createMenuItem = async (req, res) => {
       spiceLevel: spiceLevel || '🌶️',
       prepTime: prepTime || '15 min',
       calories: calories || '500 kcal',
-      isVegetarian: isVegetarian === 'true',
-      isSpicy: isSpicy === 'true',
-      isPopular: isPopular === 'true',
-      isSignature: isSignature === 'true',
-      ingredients: ingredients ? ingredients.split(',').map(i => i.trim()) : [],
+      isVegetarian: parseBoolean(isVegetarian),
+      isSpicy: parseBoolean(isSpicy),
+      isPopular: parseBoolean(isPopular),
+      isSignature: parseBoolean(isSignature),
+      ingredients: ingredients ? (typeof ingredients === 'string' ? ingredients.split(',').map(i => i.trim()) : ingredients) : [],
       greekText: greekText || ''
     });
+
+    console.log('✅ Menu item created with image:', menuItem.image);
 
     res.status(201).json({
       success: true,
       data: menuItem
     });
   } catch (error) {
+    console.error('❌ Error creating menu item:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// @desc    Update menu item
+// @route   PUT /api/menu/:id
+// @access  Private/Admin
+const updateMenuItem = async (req, res) => {
+  try {
+    let menuItem = await MenuItem.findById(req.params.id);
+    
+    if (!menuItem) {
+      return res.status(404).json({
+        success: false,
+        message: 'Menu item not found'
+      });
+    }
+
+    // Parse boolean values
+    const parseBoolean = (value) => {
+      if (value === 'true') return true;
+      if (value === 'false') return false;
+      return !!value;
+    };
+
+    // Handle image update
+    if (req.file) {
+      // Delete old image if not default
+      if (menuItem.image && menuItem.image !== 'default-food.jpg') {
+        const oldImagePath = path.join(__dirname, '../../uploads', menuItem.image);
+        if (fs.existsSync(oldImagePath)) {
+          fs.unlinkSync(oldImagePath);
+          console.log('✅ Deleted old image:', menuItem.image);
+        }
+      }
+      req.body.image = req.file.filename;
+      console.log('✅ Updated with new image:', req.file.filename);
+    }
+
+    // Parse ingredients if provided
+    if (req.body.ingredients) {
+      req.body.ingredients = typeof req.body.ingredients === 'string' 
+        ? req.body.ingredients.split(',').map(i => i.trim()) 
+        : req.body.ingredients;
+    }
+
+    // Parse boolean fields
+    ['isVegetarian', 'isSpicy', 'isPopular', 'isSignature', 'isAvailable'].forEach(field => {
+      if (req.body[field] !== undefined) {
+        req.body[field] = parseBoolean(req.body[field]);
+      }
+    });
+
+    // Parse price to number
+    if (req.body.price) {
+      req.body.price = Number(req.body.price);
+    }
+
+    menuItem = await MenuItem.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true, runValidators: true }
+    );
+
+    console.log('✅ Menu item updated, image:', menuItem.image);
+
+    res.json({
+      success: true,
+      data: menuItem
+    });
+  } catch (error) {
+    console.error('❌ Error updating menu item:', error);
     res.status(500).json({
       success: false,
       message: error.message
