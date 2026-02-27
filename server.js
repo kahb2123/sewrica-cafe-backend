@@ -14,9 +14,9 @@ const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:3000',
   'https://kahb2123.github.io',
-  'https://sewrica-cafe-backend.onrender.com'
+  'https://sewrica-cafe-backend.onrender.com',
+  /\.vercel\.app$/ // This allows ANY vercel.app subdomain
 ];
-
 // CORS middleware with explicit options
 app.use(cors({
   origin: function(origin, callback) {
