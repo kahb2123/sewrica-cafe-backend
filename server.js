@@ -16,8 +16,8 @@ const allowedOrigins = [
   'https://kahb2123.github.io',
   'https://sewrica-cafe-backend.onrender.com',
   'https://sewrica-cafe-frontend-git-main-kahb2123s-projects.vercel.app',
-  'https://sewrica-cafe-frontend-3gmdpiv67-kahb2123s-projects.vercel.app', // Fixed: removed trailing slash
-  /\.vercel\.app$/ // This allows ANY vercel.app subdomain
+  'https://sewrica-cafe-frontend-3gmdpiv67-kahb2123s-projects.vercel.app',
+  /\.vercel\.app$/
 ];
 
 // Main CORS configuration
@@ -32,7 +32,7 @@ app.use(cors({
     }
     
     // Check if origin matches vercel.app pattern
-    if (origin.match(/\.vercel\.app$/)) {
+    if (origin && origin.match && origin.match(/\.vercel\.app$/)) {
       return callback(null, true);
     }
     
@@ -42,12 +42,6 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
 }));
-
-// Handle preflight requests
-// app.options('*', cors()); // Uncommented and fixed
-
-// Remove the duplicate development CORS block entirely
-// ================================================
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -101,30 +95,66 @@ app.get('/', (req, res) => {
   });
 });
 
-// Debug route to see all registered routes
+// ===== FIXED DEBUG ROUTE =====
 app.get('/api/debug-routes', (req, res) => {
-  const routes = [];
-  
-  const extractRoutes = (stack, basePath = '') => {
-    stack.forEach(layer => {
+  try {
+    const routes = [];
+    
+    if (!app._router || !app._router.stack) {
+      return res.json({ message: 'Router not initialized', routes: [] });
+    }
+    
+    app._router.stack.forEach(layer => {
+      // Handle regular routes
       if (layer.route) {
         const methods = Object.keys(layer.route.methods).join(', ').toUpperCase();
         routes.push({
-          path: basePath + layer.route.path,
-          methods: methods
+          path: layer.route.path,
+          methods: methods,
+          type: 'direct'
         });
-      } else if (layer.name === 'router' && layer.handle.stack) {
-        extractRoutes(layer.handle.stack, basePath);
+      }
+      // Handle router middleware (our /api routes)
+      else if (layer.name === 'router' && layer.handle && layer.handle.stack) {
+        // Get the base path from the layer's regexp
+        let basePath = '';
+        if (layer.regexp) {
+          const regexpStr = layer.regexp.toString();
+          const match = regexpStr.match(/\/\^\\\/([^\\]+)/);
+          if (match && match[1]) {
+            basePath = '/' + match[1].replace(/\\\//g, '/');
+          }
+        }
+        
+        // Iterate through the router's stack
+        layer.handle.stack.forEach(nestedLayer => {
+          if (nestedLayer.route) {
+            const methods = Object.keys(nestedLayer.route.methods).join(', ').toUpperCase();
+            routes.push({
+              path: basePath + nestedLayer.route.path,
+              methods: methods,
+              type: 'nested'
+            });
+          }
+        });
       }
     });
-  };
-  
-  extractRoutes(app._router.stack);
-  res.json({
-    totalRoutes: routes.length,
-    routes: routes.sort((a, b) => a.path.localeCompare(b.path))
-  });
+    
+    res.json({
+      success: true,
+      totalRoutes: routes.length,
+      routes: routes.sort((a, b) => a.path.localeCompare(b.path))
+    });
+  } catch (error) {
+    console.error('Debug route error:', error);
+    res.status(500).json({ 
+      message: 'Error generating route list',
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
 });
+// ===== END DEBUG ROUTE =====
 
 // Test uploads route
 app.get('/test-uploads', (req, res) => {
