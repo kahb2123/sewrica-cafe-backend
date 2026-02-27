@@ -9,11 +9,44 @@ dotenv.config();
 
 const app = express();
 
-// Middleware
+// ========== UPDATED CORS CONFIGURATION ==========
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'https://kahb2123.github.io',
+  'https://sewrica-cafe-backend.onrender.com'
+];
+
+// CORS middleware with explicit options
 app.use(cors({
-  origin: true, // This allows any origin in development
-  credentials: true
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, etc)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) === -1 && process.env.NODE_ENV === 'production') {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range']
 }));
+
+// Handle preflight requests explicitly
+// app.options(/.*/, cors());
+
+// For development, you can also keep this simpler approach
+if (process.env.NODE_ENV !== 'production') {
+  app.use(cors({
+    origin: true,
+    credentials: true
+  }));
+}
+// ================================================
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -37,7 +70,7 @@ const menuRoutes = require('./src/routes/menuRoutes');
 const adminRoutes = require('./src/routes/adminRoutes');
 const orderRoutes = require('./src/routes/orderRoutes');
 const paymentRoutes = require('./src/routes/paymentRoutes');
-const staffRoutes = require('./src/routes/staffRoutes'); // ✅ Staff routes
+const staffRoutes = require('./src/routes/staffRoutes');
 const setupRoutes = require('./src/routes/setup');
 
 // Routes
@@ -46,7 +79,7 @@ app.use('/api/menu', menuRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/payments', paymentRoutes);
-app.use('/api/staff', staffRoutes); // ✅ Add staff routes
+app.use('/api/staff', staffRoutes);
 app.use('/api/setup', setupRoutes);
 
 // Test route
@@ -60,7 +93,7 @@ app.get('/', (req, res) => {
       menu: '/api/menu',
       orders: '/api/orders',
       admin: '/api/admin',
-      staff: '/api/staff', // ✅ Added staff to endpoints
+      staff: '/api/staff',
       setup: '/api/setup'
     }
   });

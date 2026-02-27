@@ -4,10 +4,258 @@ const MenuItem = require('../models/MenuItem');
 const Order = require('../models/Order');
 const User = require('../models/User');
 const { protect, adminOnly } = require('../middleware/authMiddleware');
+const bcrypt = require('bcryptjs'); // Make sure to add this import
 
 // Protect all admin routes - only admins can access
 router.use(protect); // First check if user is authenticated
 router.use(adminOnly); // Then check if user is admin
+
+// @desc    Create new staff member
+// @route   POST /api/admin/staff
+// @access  Private/Admin
+router.post('/staff', async (req, res) => {
+  try {
+    const { name, email, phone, password, role } = req.body;
+    
+    // Validate required fields
+    if (!name || !email || !phone || !password || !role) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Please provide all required fields' 
+      });
+    }
+
+    // Validate role
+    const validRoles = ['cook', 'delivery', 'cashier', 'admin'];
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid role. Must be one of: cook, delivery, cashier, admin' 
+      });
+    }
+    
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'User with this email already exists' 
+      });
+    }
+    
+    // Hash password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+    
+    // Create new staff user
+    const staff = await User.create({
+      name,
+      email,
+      phone,
+      password: hashedPassword,
+      role,
+      isActive: true
+    });
+    
+    // Remove password from response
+    const staffResponse = staff.toObject();
+    delete staffResponse.password;
+    
+    res.status(201).json({
+      success: true,
+      message: `${role} created successfully`,
+      staff: staffResponse
+    });
+  } catch (error) {
+    console.error('Error creating staff:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to create staff member' 
+    });
+  }
+});
+
+// @desc    Get all staff members
+// @route   GET /api/admin/staff
+// @access  Private/Admin
+router.get('/staff', async (req, res) => {
+  try {
+    const { role } = req.query;
+    let query = {};
+    
+    if (role && ['cook', 'delivery', 'cashier', 'admin'].includes(role)) {
+      query.role = role;
+    } else if (!role) {
+      // If no role specified, get all staff roles
+      query.role = { $in: ['cook', 'delivery', 'cashier', 'admin'] };
+    }
+    
+    const staff = await User.find(query)
+      .select('-password')
+      .sort({ createdAt: -1 });
+    
+    res.json({
+      success: true,
+      count: staff.length,
+      staff
+    });
+  } catch (error) {
+    console.error('Error fetching staff:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to fetch staff members' 
+    });
+  }
+});
+
+// @desc    Update staff member
+// @route   PUT /api/admin/staff/:id
+// @access  Private/Admin
+router.put('/staff/:id', async (req, res) => {
+  try {
+    const { name, email, phone, role, isActive } = req.body;
+    
+    const staff = await User.findById(req.params.id);
+    if (!staff) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Staff member not found' 
+      });
+    }
+    
+    // Update fields
+    if (name) staff.name = name;
+    if (email) staff.email = email;
+    if (phone) staff.phone = phone;
+    if (role) {
+      const validRoles = ['cook', 'delivery', 'cashier', 'admin'];
+      if (validRoles.includes(role)) {
+        staff.role = role;
+      }
+    }
+    if (isActive !== undefined) staff.isActive = isActive;
+    
+    await staff.save();
+    
+    const updatedStaff = staff.toObject();
+    delete updatedStaff.password;
+    
+    res.json({
+      success: true,
+      message: 'Staff member updated successfully',
+      staff: updatedStaff
+    });
+  } catch (error) {
+    console.error('Error updating staff:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to update staff member' 
+    });
+  }
+});
+
+// @desc    Delete staff member
+// @route   DELETE /api/admin/staff/:id
+// @access  Private/Admin
+router.delete('/staff/:id', async (req, res) => {
+  try {
+    const staff = await User.findById(req.params.id);
+    
+    if (!staff) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Staff member not found' 
+      });
+    }
+    
+    // Optional: Check if staff has active orders before deleting
+    const activeOrders = await Order.findOne({
+      $or: [
+        { assignedChef: staff._id, status: { $in: ['preparing', 'confirmed'] } },
+        { assignedDelivery: staff._id, status: { $in: ['ready', 'out-for-delivery'] } }
+      ]
+    });
+    
+    if (activeOrders) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot delete staff member with active orders. Reassign orders first.'
+      });
+    }
+    
+    await staff.deleteOne();
+    
+    res.json({
+      success: true,
+      message: 'Staff member deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting staff:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to delete staff member' 
+    });
+  }
+});
+
+// @desc    Get staff statistics
+// @route   GET /api/admin/staff/stats
+// @access  Private/Admin
+router.get('/staff/stats', async (req, res) => {
+  try {
+    const stats = await User.aggregate([
+      {
+        $match: {
+          role: { $in: ['cook', 'delivery', 'cashier', 'admin'] }
+        }
+      },
+      {
+        $group: {
+          _id: '$role',
+          count: { $sum: 1 },
+          active: {
+            $sum: { $cond: ['$isActive', 1, 0] }
+          }
+        }
+      }
+    ]);
+    
+    const formattedStats = {
+      cooks: { total: 0, active: 0 },
+      delivery: { total: 0, active: 0 },
+      cashiers: { total: 0, active: 0 },
+      admins: { total: 0, active: 0 }
+    };
+    
+    stats.forEach(stat => {
+      switch(stat._id) {
+        case 'cook':
+          formattedStats.cooks = { total: stat.count, active: stat.active };
+          break;
+        case 'delivery':
+          formattedStats.delivery = { total: stat.count, active: stat.active };
+          break;
+        case 'cashier':
+          formattedStats.cashiers = { total: stat.count, active: stat.active };
+          break;
+        case 'admin':
+          formattedStats.admins = { total: stat.count, active: stat.active };
+          break;
+      }
+    });
+    
+    res.json({
+      success: true,
+      stats: formattedStats
+    });
+  } catch (error) {
+    console.error('Error fetching staff stats:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to fetch staff statistics' 
+    });
+  }
+});
 
 // @desc    Get dashboard statistics
 // @route   GET /api/admin/stats
