@@ -108,9 +108,8 @@ const getMenuItemsByCategory = async (req, res) => {
 // @access  Private/Admin
 const createMenuItem = async (req, res) => {
   try {
-    // Log incoming request info for debugging
     console.log('\n[createMenuItem] headers:', req.headers['content-type']);
-    console.log('[createMenuItem] file:', !!req.file, req.file && req.file.filename);
+    console.log('[createMenuItem] file:', !!req.file, req.file);
     console.log('[createMenuItem] body keys:', Object.keys(req.body));
 
     let {
@@ -139,11 +138,19 @@ const createMenuItem = async (req, res) => {
       });
     }
 
-    // Handle image upload
-    let imagePath = 'default-food.jpg';
+    // Handle image upload - FIXED: Use req.file.path for Cloudinary URL
+    let imageUrl = 'default-food.jpg';
     if (req.file) {
-      imagePath = req.file.filename;
-      console.log('✅ Image saved as:', imagePath);
+      // For Cloudinary, the full URL is in req.file.path
+      imageUrl = req.file.path; 
+      console.log('✅ Image uploaded to Cloudinary URL:', imageUrl);
+      
+      // Also log the full file object for debugging
+      console.log('📸 File object:', {
+        filename: req.file.filename,
+        path: req.file.path,
+        size: req.file.size
+      });
     }
 
     const menuItem = await MenuItem.create({
@@ -153,7 +160,7 @@ const createMenuItem = async (req, res) => {
       fullDescription,
       price: Number(price),
       category,
-      image: imagePath,
+      image: imageUrl, // This will now be the full Cloudinary URL
       spiceLevel: spiceLevel || '🌶️',
       prepTime: prepTime || '15 min',
       calories: calories || '500 kcal',
@@ -165,7 +172,7 @@ const createMenuItem = async (req, res) => {
       greekText: greekText || ''
     });
 
-    console.log('✅ Menu item created with image:', menuItem.image);
+    console.log('✅ Menu item created with image URL:', menuItem.image);
 
     res.status(201).json({
       success: true,
@@ -201,18 +208,28 @@ const updateMenuItem = async (req, res) => {
       return !!value;
     };
 
-    // Handle image update
+    // Handle image update with Cloudinary - FIXED
     if (req.file) {
-      // Delete old image if not default
-      if (menuItem.image && menuItem.image !== 'default-food.jpg') {
-        const oldImagePath = path.join(__dirname, '../../uploads', menuItem.image);
-        if (fs.existsSync(oldImagePath)) {
-          fs.unlinkSync(oldImagePath);
-          console.log('✅ Deleted old image:', menuItem.image);
+      // Delete old image from Cloudinary if it exists and is from Cloudinary
+      if (menuItem.image && menuItem.image !== 'default-food.jpg' && menuItem.image.includes('cloudinary')) {
+        try {
+          // Extract public_id from the Cloudinary URL
+          // URL format: https://res.cloudinary.com/ddcgxk48k/image/upload/v1234567/sewrica-cafe/menu-items/menu-123456789
+          const urlParts = menuItem.image.split('/');
+          const publicIdWithVersion = urlParts.slice(urlParts.indexOf('upload') + 2).join('/');
+          // Remove version if present (v1234567/)
+          const publicId = publicIdWithVersion.replace(/^v\d+\//, '').split('.')[0];
+          
+          const result = await cloudinary.uploader.destroy(publicId);
+          console.log('✅ Deleted old image from Cloudinary:', result);
+        } catch (cloudinaryError) {
+          console.log('⚠️ Could not delete from Cloudinary:', cloudinaryError.message);
         }
       }
-      req.body.image = req.file.filename;
-      console.log('✅ Updated with new image:', req.file.filename);
+      
+      // FIXED: Use req.file.path for the full Cloudinary URL
+      req.body.image = req.file.path;
+      console.log('✅ Updated with new Cloudinary image:', req.file.path);
     }
 
     // Parse ingredients if provided
