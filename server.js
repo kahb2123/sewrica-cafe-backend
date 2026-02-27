@@ -17,7 +17,7 @@ const allowedOrigins = [
   'https://sewrica-cafe-backend.onrender.com',
   'https://sewrica-cafe-frontend-git-main-kahb2123s-projects.vercel.app',
   'https://sewrica-cafe-frontend-3gmdpiv67-kahb2123s-projects.vercel.app',
-  /\.vercel\.app$/
+  /\.vercel\.app$/ // This allows ANY vercel.app subdomain
 ];
 
 // Main CORS configuration
@@ -95,67 +95,6 @@ app.get('/', (req, res) => {
   });
 });
 
-// ===== FIXED DEBUG ROUTE =====
-app.get('/api/debug-routes', (req, res) => {
-  try {
-    const routes = [];
-    
-    if (!app._router || !app._router.stack) {
-      return res.json({ message: 'Router not initialized', routes: [] });
-    }
-    
-    app._router.stack.forEach(layer => {
-      // Handle regular routes
-      if (layer.route) {
-        const methods = Object.keys(layer.route.methods).join(', ').toUpperCase();
-        routes.push({
-          path: layer.route.path,
-          methods: methods,
-          type: 'direct'
-        });
-      }
-      // Handle router middleware (our /api routes)
-      else if (layer.name === 'router' && layer.handle && layer.handle.stack) {
-        // Get the base path from the layer's regexp
-        let basePath = '';
-        if (layer.regexp) {
-          const regexpStr = layer.regexp.toString();
-          const match = regexpStr.match(/\/\^\\\/([^\\]+)/);
-          if (match && match[1]) {
-            basePath = '/' + match[1].replace(/\\\//g, '/');
-          }
-        }
-        
-        // Iterate through the router's stack
-        layer.handle.stack.forEach(nestedLayer => {
-          if (nestedLayer.route) {
-            const methods = Object.keys(nestedLayer.route.methods).join(', ').toUpperCase();
-            routes.push({
-              path: basePath + nestedLayer.route.path,
-              methods: methods,
-              type: 'nested'
-            });
-          }
-        });
-      }
-    });
-    
-    res.json({
-      success: true,
-      totalRoutes: routes.length,
-      routes: routes.sort((a, b) => a.path.localeCompare(b.path))
-    });
-  } catch (error) {
-    console.error('Debug route error:', error);
-    res.status(500).json({ 
-      message: 'Error generating route list',
-      error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-});
-// ===== END DEBUG ROUTE =====
-
 // Test uploads route
 app.get('/test-uploads', (req, res) => {
   const uploadsDir = path.join(__dirname, 'uploads');
@@ -189,7 +128,76 @@ if (!fs.existsSync(uploadsDir)) {
   console.log('📁 Created uploads folder');
 }
 
-// 404 handler
+// ===== DEBUG ROUTE - PLACED HERE AFTER ALL ROUTES =====
+app.get('/api/debug-routes', (req, res) => {
+  try {
+    // Check if router exists
+    if (!app._router || !app._router.stack) {
+      return res.json({ 
+        message: 'Router not initialized yet. Try again after server starts.',
+        routes: [] 
+      });
+    }
+    
+    const routes = [];
+    
+    app._router.stack.forEach(layer => {
+      // Handle regular routes (like '/', '/test-uploads', etc.)
+      if (layer.route) {
+        const methods = Object.keys(layer.route.methods).join(', ').toUpperCase();
+        routes.push({
+          path: layer.route.path,
+          methods: methods,
+          type: 'direct'
+        });
+      }
+      // Handle router middleware (our /api routes)
+      else if (layer.name === 'router' && layer.handle && layer.handle.stack) {
+        // Get the base path from the layer's regexp
+        let basePath = '';
+        if (layer.regexp) {
+          const regexpStr = layer.regexp.toString();
+          // Extract the base path from regex like /^\\/api\\/auth\\/?(?=\\/|$)/i
+          const match = regexpStr.match(/\/\^\\\/([^\\/]+)/);
+          if (match && match[1]) {
+            basePath = '/' + match[1].replace(/\\\//g, '/');
+          }
+        }
+        
+        // Iterate through the router's stack
+        layer.handle.stack.forEach(nestedLayer => {
+          if (nestedLayer.route) {
+            const methods = Object.keys(nestedLayer.route.methods).join(', ').toUpperCase();
+            routes.push({
+              path: basePath + nestedLayer.route.path,
+              methods: methods,
+              type: 'nested'
+            });
+          }
+        });
+      }
+    });
+    
+    // Sort routes by path
+    routes.sort((a, b) => a.path.localeCompare(b.path));
+    
+    res.json({
+      success: true,
+      totalRoutes: routes.length,
+      routes: routes
+    });
+  } catch (error) {
+    console.error('Debug route error:', error);
+    res.status(500).json({ 
+      message: 'Error generating route list',
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+// ===== END DEBUG ROUTE =====
+
+// 404 handler (this should be LAST)
 app.use((req, res) => {
   res.status(404).json({ 
     message: 'Route not found',
