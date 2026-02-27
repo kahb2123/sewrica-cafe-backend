@@ -9,34 +9,44 @@ dotenv.config();
 
 const app = express();
 
-// ========== UPDATED CORS CONFIGURATION ==========
+// ========== FIXED CORS CONFIGURATION ==========
 const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:3000',
   'https://kahb2123.github.io',
   'https://sewrica-cafe-backend.onrender.com',
   'https://sewrica-cafe-frontend-git-main-kahb2123s-projects.vercel.app',
-  'https://sewrica-cafe-frontend-3gmdpiv67-kahb2123s-projects.vercel.app/',
-  // Add any other Vercel preview URLs you might use
+  'https://sewrica-cafe-frontend-3gmdpiv67-kahb2123s-projects.vercel.app', // Fixed: removed trailing slash
+  /\.vercel\.app$/ // This allows ANY vercel.app subdomain
 ];
 
+// Main CORS configuration
 app.use(cors({
-  origin: allowedOrigins,
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, etc)
+    if (!origin) return callback(null, true);
+    
+    // Check if origin is in allowed list
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      return callback(null, true);
+    }
+    
+    // Check if origin matches vercel.app pattern
+    if (origin.match(/\.vercel\.app$/)) {
+      return callback(null, true);
+    }
+    
+    callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
 }));
 
-// Handle preflight requests explicitly
-// app.options(/.*/, cors());
+// Handle preflight requests
+app.options('*', cors()); // Uncommented and fixed
 
-// For development, you can also keep this simpler approach
-if (process.env.NODE_ENV !== 'production') {
-  app.use(cors({
-    origin: true,
-    credentials: true
-  }));
-}
+// Remove the duplicate development CORS block entirely
 // ================================================
 
 app.use(express.json());
@@ -48,7 +58,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/sewrica_cafe')
   .then(() => {
-    console.log('✅ MongoDB Connected: localhost');
+    console.log('✅ MongoDB Connected');
     console.log('📊 Database Name: sewrica_cafe');
   })
   .catch(err => {
@@ -88,6 +98,31 @@ app.get('/', (req, res) => {
       staff: '/api/staff',
       setup: '/api/setup'
     }
+  });
+});
+
+// Debug route to see all registered routes
+app.get('/api/debug-routes', (req, res) => {
+  const routes = [];
+  
+  const extractRoutes = (stack, basePath = '') => {
+    stack.forEach(layer => {
+      if (layer.route) {
+        const methods = Object.keys(layer.route.methods).join(', ').toUpperCase();
+        routes.push({
+          path: basePath + layer.route.path,
+          methods: methods
+        });
+      } else if (layer.name === 'router' && layer.handle.stack) {
+        extractRoutes(layer.handle.stack, basePath);
+      }
+    });
+  };
+  
+  extractRoutes(app._router.stack);
+  res.json({
+    totalRoutes: routes.length,
+    routes: routes.sort((a, b) => a.path.localeCompare(b.path))
   });
 });
 
@@ -155,6 +190,7 @@ app.listen(PORT, () => {
   console.log('\n📡 Available API endpoints:');
   console.log('   GET  /                    - API Info');
   console.log('   GET  /api/health           - Health check');
+  console.log('   GET  /api/debug-routes      - Debug routes');
   
   // Auth endpoints
   console.log('\n🔐 AUTH ENDPOINTS:');
@@ -191,9 +227,9 @@ app.listen(PORT, () => {
   console.log('   GET  /api/admin/users       - Get all users');
   console.log('   GET  /api/admin/reports/daily - Daily reports');
   
-  // ✅ NEW STAFF ENDPOINTS
+  // Staff endpoints
   console.log('\n👨‍🍳 STAFF MANAGEMENT ENDPOINTS:');
-  console.log('   GET  /api/staff/:role        - Get staff by role (cook/delivery/cashier)');
+  console.log('   GET  /api/staff/:role        - Get staff by role');
   console.log('   POST /api/staff/assign-chef/:orderId - Assign order to chef');
   console.log('   POST /api/staff/assign-delivery/:orderId - Assign order to delivery');
   console.log('   POST /api/staff/start-cooking/:orderId - Chef starts cooking');
