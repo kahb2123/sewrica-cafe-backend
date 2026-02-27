@@ -44,7 +44,7 @@ app.use(cors({
 }));
 
 // Handle preflight requests
-app.options('*', cors()); // Uncommented and fixed
+// app.options('*', cors()); // Uncommented and fixed
 
 // Remove the duplicate development CORS block entirely
 // ================================================
