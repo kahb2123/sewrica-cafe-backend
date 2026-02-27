@@ -16,6 +16,7 @@ const allowedOrigins = [
   'https://kahb2123.github.io',
   'https://sewrica-cafe-backend.onrender.com',
   'https://sewrica-cafe-frontend-git-main-kahb2123s-projects.vercel.app',
+  'https://sewrica-cafe-frontend-3gmdpiv67-kahb2123s-projects.vercel.app/',
   // Add any other Vercel preview URLs you might use
 ];
 
