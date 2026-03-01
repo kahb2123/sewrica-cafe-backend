@@ -26,21 +26,29 @@ const io = socketIo(server, {
         /\.vercel\.app$/
       ];
       
+      // Allow requests with no origin (like mobile apps, curl, etc)
       if (!origin) return callback(null, true);
       
+      // Check if origin is in allowed list
       if (allowedOrigins.indexOf(origin) !== -1) {
         return callback(null, true);
       }
       
+      // Check if origin matches vercel.app pattern
       if (origin && origin.match && origin.match(/\.vercel\.app$/)) {
         return callback(null, true);
       }
       
-      callback(null, true); // Allow all in development
+      // Allow all in development
+      callback(null, true);
     },
     credentials: true,
     methods: ['GET', 'POST']
-  }
+  },
+  transports: ['websocket', 'polling'], // Add both transports for better compatibility
+  allowEIO3: true, // Enable compatibility with older clients
+  pingTimeout: 60000, // Increase timeout for slow connections
+  pingInterval: 25000 // Ping interval
 });
 
 // Make io accessible to routes
@@ -49,6 +57,7 @@ app.set('io', io);
 // Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('🔌 New client connected:', socket.id);
+  console.log('   Total connected clients:', io.engine.clientsCount);
 
   // Customer registers to their order room
   socket.on('register-order', (orderId) => {
@@ -57,18 +66,42 @@ io.on('connection', (socket) => {
     console.log(`📦 Customer joined room: ${roomName}`);
     
     // Send confirmation
-    socket.emit('registered', { orderId, room: roomName });
+    socket.emit('registered', { 
+      orderId, 
+      room: roomName,
+      message: 'Successfully registered for order updates' 
+    });
   });
 
   // Staff joins their staff room
   socket.on('register-staff', (staffId, role) => {
     const roomName = `staff-${role}`;
     socket.join(roomName);
-    console.log(`👨‍🍳 Staff joined room: ${roomName}`);
+    console.log(`👨‍🍳 Staff joined room: ${roomName} (ID: ${staffId})`);
+    
+    // Send confirmation
+    socket.emit('staff-registered', {
+      role,
+      room: roomName,
+      message: `Registered as ${role}`
+    });
   });
 
-  socket.on('disconnect', () => {
-    console.log('🔌 Client disconnected:', socket.id);
+  // Handle disconnection
+  socket.on('disconnect', (reason) => {
+    console.log('🔌 Client disconnected:', socket.id, 'Reason:', reason);
+  });
+
+  // Handle errors
+  socket.on('error', (error) => {
+    console.error('Socket error:', error);
+  });
+
+  // Ping/pong for connection health
+  socket.on('ping', (callback) => {
+    if (typeof callback === 'function') {
+      callback();
+    }
   });
 });
 
@@ -85,19 +118,28 @@ const allowedOrigins = [
   /\.vercel\.app$/
 ];
 
+// Main CORS configuration
 app.use(cors({
   origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, etc)
     if (!origin) return callback(null, true);
     
+    // Check if origin is in allowed list
     if (allowedOrigins.indexOf(origin) !== -1) {
       return callback(null, true);
     }
     
+    // Check if origin matches vercel.app pattern
     if (origin && origin.match && origin.match(/\.vercel\.app$/)) {
       return callback(null, true);
     }
     
-    callback(null, true);
+    // In development, allow all
+    if (process.env.NODE_ENV !== 'production') {
+      return callback(null, true);
+    }
+    
+    callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
@@ -111,9 +153,13 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/sewrica_cafe')
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/sewrica_cafe', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+})
   .then(() => {
     console.log('✅ MongoDB Connected');
+    console.log('📊 Database Name: sewrica_cafe');
   })
   .catch(err => {
     console.error('❌ MongoDB Connection Error:', err.message);
@@ -144,14 +190,32 @@ app.get('/', (req, res) => {
     message: 'Welcome to SEWRICA Cafe API',
     status: 'running',
     timestamp: new Date().toISOString(),
+    socketIO: 'enabled',
     endpoints: {
       auth: '/api/auth',
       menu: '/api/menu',
       orders: '/api/orders',
       admin: '/api/admin',
       staff: '/api/staff',
-      setup: '/api/setup'
+      setup: '/api/setup',
+      socketHealth: '/api/socket-health'
     }
+  });
+});
+
+// Test uploads route
+app.get('/test-uploads', (req, res) => {
+  const uploadsDir = path.join(__dirname, 'uploads');
+  
+  fs.readdir(uploadsDir, (err, files) => {
+    if (err) {
+      return res.json({ error: err.message });
+    }
+    res.json({
+      message: 'Uploads folder contents',
+      files: files,
+      path: uploadsDir
+    });
   });
 });
 
@@ -161,9 +225,22 @@ app.get('/api/health', (req, res) => {
     status: 'healthy',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-    uploads: fs.existsSync(path.join(__dirname, 'uploads'))
+    uploads: fs.existsSync(path.join(__dirname, 'uploads')),
+    socketIO: 'enabled'
   });
 });
+
+// ========== SOCKET.IO HEALTH CHECK ==========
+app.get('/api/socket-health', (req, res) => {
+  res.json({
+    status: 'Socket.io running',
+    connections: io.engine.clientsCount,
+    clients: Object.keys(io.sockets.sockets).length,
+    transports: ['websocket', 'polling'],
+    timestamp: new Date().toISOString()
+  });
+});
+// ========== END SOCKET.IO HEALTH CHECK ==========
 
 // Create uploads folder if it doesn't exist
 const uploadsDir = path.join(__dirname, 'uploads');
@@ -172,7 +249,76 @@ if (!fs.existsSync(uploadsDir)) {
   console.log('📁 Created uploads folder');
 }
 
-// 404 handler
+// ===== DEBUG ROUTE - PLACED HERE AFTER ALL ROUTES =====
+app.get('/api/debug-routes', (req, res) => {
+  try {
+    // Check if router exists
+    if (!app._router || !app._router.stack) {
+      return res.json({ 
+        message: 'Router not initialized yet. Try again after server starts.',
+        routes: [] 
+      });
+    }
+    
+    const routes = [];
+    
+    app._router.stack.forEach(layer => {
+      // Handle regular routes (like '/', '/test-uploads', etc.)
+      if (layer.route) {
+        const methods = Object.keys(layer.route.methods).join(', ').toUpperCase();
+        routes.push({
+          path: layer.route.path,
+          methods: methods,
+          type: 'direct'
+        });
+      }
+      // Handle router middleware (our /api routes)
+      else if (layer.name === 'router' && layer.handle && layer.handle.stack) {
+        // Get the base path from the layer's regexp
+        let basePath = '';
+        if (layer.regexp) {
+          const regexpStr = layer.regexp.toString();
+          // Extract the base path from regex like /^\\/api\\/auth\\/?(?=\\/|$)/i
+          const match = regexpStr.match(/\/\^\\\/([^\\/]+)/);
+          if (match && match[1]) {
+            basePath = '/' + match[1].replace(/\\\//g, '/');
+          }
+        }
+        
+        // Iterate through the router's stack
+        layer.handle.stack.forEach(nestedLayer => {
+          if (nestedLayer.route) {
+            const methods = Object.keys(nestedLayer.route.methods).join(', ').toUpperCase();
+            routes.push({
+              path: basePath + nestedLayer.route.path,
+              methods: methods,
+              type: 'nested'
+            });
+          }
+        });
+      }
+    });
+    
+    // Sort routes by path
+    routes.sort((a, b) => a.path.localeCompare(b.path));
+    
+    res.json({
+      success: true,
+      totalRoutes: routes.length,
+      routes: routes
+    });
+  } catch (error) {
+    console.error('Debug route error:', error);
+    res.status(500).json({ 
+      message: 'Error generating route list',
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+// ===== END DEBUG ROUTE =====
+
+// 404 handler (this should be LAST)
 app.use((req, res) => {
   res.status(404).json({ 
     message: 'Route not found',
@@ -194,4 +340,72 @@ server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📁 Uploads folder: ${path.join(__dirname, 'uploads')}`);
   console.log(`🔌 Socket.io server initialized`);
+  console.log(`🌐 WebSocket endpoint: http://localhost:${PORT}/socket.io/`);
+  console.log(`📊 Socket.io health check: http://localhost:${PORT}/api/socket-health`);
+  
+  if (fs.existsSync(uploadsDir)) {
+    const files = fs.readdirSync(uploadsDir);
+    console.log(`📸 Images in uploads: ${files.length} files`);
+  }
+  
+  console.log('\n📡 Available API endpoints:');
+  console.log('   GET  /                    - API Info');
+  console.log('   GET  /api/health           - Health check');
+  console.log('   GET  /api/socket-health     - Socket.io status');
+  console.log('   GET  /api/debug-routes      - Debug routes');
+  
+  // Auth endpoints
+  console.log('\n🔐 AUTH ENDPOINTS:');
+  console.log('   POST /api/auth/register    - Register');
+  console.log('   POST /api/auth/login       - Login');
+  console.log('   GET  /api/auth/profile     - Get profile');
+  
+  // Menu endpoints
+  console.log('\n🍽️ MENU ENDPOINTS:');
+  console.log('   GET  /api/menu              - Get menu items');
+  console.log('   POST /api/menu              - Create menu item (admin)');
+  console.log('   PUT  /api/menu/:id          - Update menu item (admin)');
+  console.log('   DELETE /api/menu/:id        - Delete menu item (admin)');
+  
+  // Order endpoints
+  console.log('\n📦 ORDER ENDPOINTS:');
+  console.log('   POST /api/orders            - Create new order');
+  console.log('   GET  /api/orders/my-orders  - Get user orders');
+  console.log('   GET  /api/orders/:id        - Get single order');
+  console.log('   PATCH /api/orders/:id/cancel - Cancel order');
+  console.log('   PATCH /api/orders/:id/status - Update order status (staff)');
+  
+  // Payment endpoints
+  console.log('\n💰 PAYMENT ENDPOINTS:');
+  console.log('   POST /api/payments/create-payment-intent - Create Stripe payment intent');
+  console.log('   POST /api/payments/webhook - Stripe webhook');
+  console.log('   GET  /api/payments/payment-methods - Get saved payment methods');
+  console.log('   POST /api/payments/cash-payment - Process cash payment');
+  
+  // Admin endpoints
+  console.log('\n👑 ADMIN ENDPOINTS:');
+  console.log('   GET  /api/admin/stats       - Admin stats');
+  console.log('   GET  /api/admin/orders      - Get all orders');
+  console.log('   GET  /api/admin/users       - Get all users');
+  console.log('   GET  /api/admin/reports/daily - Daily reports');
+  
+  // Staff endpoints
+  console.log('\n👨‍🍳 STAFF MANAGEMENT ENDPOINTS:');
+  console.log('   GET  /api/staff/:role        - Get staff by role');
+  console.log('   POST /api/staff/assign-chef/:orderId - Assign order to chef');
+  console.log('   POST /api/staff/assign-delivery/:orderId - Assign order to delivery');
+  console.log('   POST /api/staff/start-cooking/:orderId - Chef starts cooking');
+  console.log('   POST /api/staff/complete-cooking/:orderId - Chef completes cooking');
+  console.log('   POST /api/staff/start-delivery/:orderId - Delivery starts');
+  console.log('   POST /api/staff/complete-delivery/:orderId - Delivery completes');
+  
+  // Staff Reports
+  console.log('\n📊 STAFF REPORTS:');
+  console.log('   GET  /api/staff/reports/summary - Staff performance summary');
+  console.log('   GET  /api/staff/reports/chef/:chefId - Chef performance report');
+  console.log('   GET  /api/staff/reports/delivery/:deliveryId - Delivery report');
+  
+  // Setup
+  console.log('\n⚙️ SETUP:');
+  console.log('   ✅ GET  /api/setup/create-admin - Create admin user (ONE-TIME)');
 });
