@@ -425,6 +425,215 @@ const confirmPayment = async (req, res) => {
   }
 };
 
+// ========== ADD THESE MISSING FUNCTIONS ==========
+
+// @desc    Process cash payment (for cash on delivery)
+// @route   POST /api/orders/:id/cash-payment
+// @access  Private (staff only)
+const processCashPayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amountReceived } = req.body;
+
+    const order = await Order.findById(id);
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    // Check authorization (admin or cashier only)
+    if (!['admin', 'cashier'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Not authorized to process cash payments' });
+    }
+
+    // Verify this is a cash order
+    if (order.paymentMethod !== 'cash') {
+      return res.status(400).json({ message: 'Not a cash order' });
+    }
+
+    // Check if already paid
+    if (order.paymentStatus === 'completed') {
+      return res.status(400).json({ message: 'Order already paid' });
+    }
+
+    // Calculate change
+    const change = amountReceived - order.totalAmount;
+    if (change < 0) {
+      return res.status(400).json({ 
+        message: `Insufficient amount. Need ETB ${(order.totalAmount - amountReceived).toFixed(2)} more` 
+      });
+    }
+
+    // Update order
+    order.paymentStatus = 'completed';
+    order.amountReceived = amountReceived;
+    order.change = change;
+    order.paidAt = new Date();
+    await order.save();
+
+    // ========== SOCKET.IO: Notify about cash payment ==========
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`order-${order._id}`).to('staff-admin').to('staff-cashier').emit('payment-completed', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        paymentMethod: 'cash',
+        amountReceived,
+        change,
+        paidAt: order.paidAt
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Cash payment processed successfully',
+      order: {
+        _id: order._id,
+        orderNumber: order.orderNumber,
+        totalAmount: order.totalAmount,
+        amountReceived,
+        change,
+        paidAt: order.paidAt,
+        paymentStatus: order.paymentStatus
+      }
+    });
+  } catch (error) {
+    console.error('Process cash payment error:', error);
+    res.status(500).json({ message: 'Failed to process cash payment' });
+  }
+};
+
+// @desc    Get orders by payment status (for staff)
+// @route   GET /api/orders/payment-status/:status
+// @access  Private (admin, cashier)
+const getOrdersByPaymentStatus = async (req, res) => {
+  try {
+    const { status } = req.params;
+    const validStatuses = ['pending', 'processing', 'completed', 'failed', 'refunded'];
+    
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ message: 'Invalid payment status' });
+    }
+
+    const orders = await Order.find({ paymentStatus: status })
+      .populate('customer', 'name email phone')
+      .populate('items.menuItem', 'name price')
+      .sort('-createdAt');
+
+    res.json({
+      success: true,
+      count: orders.length,
+      orders
+    });
+  } catch (error) {
+    console.error('Get orders by payment status error:', error);
+    res.status(500).json({ message: 'Failed to fetch orders' });
+  }
+};
+
+// @desc    Get payment status for an order
+// @route   GET /api/orders/:id/payment-status
+// @access  Private
+const getPaymentStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const order = await Order.findById(id).select('paymentStatus paymentMethod paidAt amountReceived change customer');
+    
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    // Check if user owns this order or is staff
+    if (order.customer.toString() !== req.user._id.toString() && 
+        !['admin', 'cashier'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Not authorized' });
+    }
+
+    res.json({
+      success: true,
+      paymentStatus: order.paymentStatus,
+      paymentMethod: order.paymentMethod,
+      paidAt: order.paidAt,
+      amountReceived: order.amountReceived,
+      change: order.change
+    });
+  } catch (error) {
+    console.error('Get payment status error:', error);
+    res.status(500).json({ message: 'Failed to get payment status' });
+  }
+};
+
+// @desc    Refund payment (admin only)
+// @route   POST /api/orders/:id/refund
+// @access  Private (admin only)
+const refundPayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    // Check if user is admin
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Only admins can process refunds' });
+    }
+
+    const order = await Order.findById(id);
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    // Check if order is paid
+    if (order.paymentStatus !== 'completed') {
+      return res.status(400).json({ message: 'Order is not paid' });
+    }
+
+    // For card payments, process refund through Stripe
+    if (order.stripePaymentIntentId && order.paymentMethod === 'card') {
+      try {
+        const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+        await stripe.refunds.create({ 
+          payment_intent: order.stripePaymentIntentId 
+        });
+      } catch (stripeError) {
+        console.error('Stripe refund error:', stripeError);
+        return res.status(500).json({ message: 'Failed to process Stripe refund' });
+      }
+    }
+
+    // Update order
+    order.paymentStatus = 'refunded';
+    order.refundReason = reason;
+    order.refundedAt = new Date();
+    await order.save();
+
+    // ========== SOCKET.IO: Notify about refund ==========
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`order-${order._id}`).to('staff-admin').emit('payment-refunded', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        paymentStatus: 'refunded',
+        refundedAt: order.refundedAt,
+        reason
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Payment refunded successfully',
+      order: {
+        _id: order._id,
+        orderNumber: order.orderNumber,
+        paymentStatus: order.paymentStatus,
+        refundedAt: order.refundedAt,
+        refundReason: reason
+      }
+    });
+  } catch (error) {
+    console.error('Refund payment error:', error);
+    res.status(500).json({ message: 'Failed to process refund' });
+  }
+};
+
 // Helper function to generate unique order number
 const generateOrderNumber = () => {
   const timestamp = Date.now().toString().slice(-6);
