@@ -1,3 +1,4 @@
+// src/models/Order.js
 const mongoose = require('mongoose');
 
 const orderItemSchema = new mongoose.Schema({
@@ -44,7 +45,7 @@ const orderSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'confirmed', 'preparing', 'ready', 'delivered', 'cancelled'],
+    enum: ['pending', 'confirmed', 'preparing', 'ready', 'out-for-delivery', 'delivered', 'cancelled'],
     default: 'pending'
   },
   paymentStatus: {
@@ -58,8 +59,8 @@ const orderSchema = new mongoose.Schema({
     required: true
   },
   stripePaymentIntentId: String,
-  amountReceived: Number, // For cash payments
-  change: Number, // For cash payments
+  amountReceived: Number,
+  change: Number,
   paidAt: Date,
   deliveryMethod: {
     type: String,
@@ -67,9 +68,7 @@ const orderSchema = new mongoose.Schema({
     required: true
   },
   
-  // ========== NEW ASSIGNMENT FIELDS ==========
-  
-  // Staff assignments
+  // ========== STAFF ASSIGNMENTS ==========
   assignedChef: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -80,53 +79,57 @@ const orderSchema = new mongoose.Schema({
     ref: 'User',
     default: null
   },
-  assignedCashier: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    default: null
-  },
   
-  // Assignment timestamps
+  // ========== STAFF ACCEPTANCE/REJECTION ==========
+  chefAccepted: {
+    type: Boolean,
+    default: false
+  },
+  chefAcceptedAt: Date,
+  chefRejected: {
+    type: Boolean,
+    default: false
+  },
+  chefRejectionReason: String,
+  chefRejectedAt: Date,
+  
+  deliveryAccepted: {
+    type: Boolean,
+    default: false
+  },
+  deliveryAcceptedAt: Date,
+  deliveryRejected: {
+    type: Boolean,
+    default: false
+  },
+  deliveryRejectionReason: String,
+  deliveryRejectedAt: Date,
+  
+  // ========== ASSIGNMENT TIMESTAMPS ==========
   assignedAt: {
     chef: Date,
-    delivery: Date,
-    cashier: Date
+    delivery: Date
   },
   
-  // Completion timestamps
-  completedAt: {
-    chef: Date,
-    delivery: Date,
-    cashier: Date
-  },
-  
-  // ========== TIME TRACKING FIELDS ==========
-  
-  // Cooking time tracking
+  // ========== TIME TRACKING ==========
   cookingStartedAt: Date,
   cookingCompletedAt: Date,
   cookingTime: {
-    type: Number, // in minutes
+    type: Number,
     default: 0
   },
-  
-  // Delivery time tracking
   deliveryStartedAt: Date,
   deliveryCompletedAt: Date,
   deliveryTime: {
-    type: String, // 'asap', '30min', '1hour', etc.
+    type: Number,
+    default: 0
+  },
+  deliveryTimeEstimate: {
+    type: String,
     default: 'asap'
   },
   
-  // Total preparation time (from confirmed to ready)
-  preparationStartedAt: Date,
-  preparationTime: {
-    type: Number, // in minutes
-    default: 0
-  },
-  
   // ========== STAFF NOTES ==========
-  
   chefNotes: {
     type: String,
     default: ''
@@ -135,13 +138,8 @@ const orderSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
-  cashierNotes: {
-    type: String,
-    default: ''
-  },
   
   // ========== DELIVERY DETAILS ==========
-  
   deliveryAddress: {
     street: String,
     area: String,
@@ -151,24 +149,19 @@ const orderSchema = new mongoose.Schema({
     additionalInfo: String
   },
   
-  estimatedDeliveryTime: Date,
-  actualDeliveryTime: Date,
-  
   // ========== ORDER METADATA ==========
-  
   orderSource: {
     type: String,
     enum: ['web', 'mobile', 'walk-in', 'phone'],
     default: 'web'
   },
-  
   specialRequests: String,
   
-  // For tracking order history
+  // ========== STATUS HISTORY ==========
   statusHistory: [{
     status: {
       type: String,
-      enum: ['pending', 'confirmed', 'preparing', 'ready', 'delivered', 'cancelled']
+      enum: ['pending', 'confirmed', 'preparing', 'ready', 'out-for-delivery', 'delivered', 'cancelled']
     },
     changedBy: {
       type: mongoose.Schema.Types.ObjectId,
@@ -181,15 +174,17 @@ const orderSchema = new mongoose.Schema({
     notes: String
   }],
 
-});
+  // ========== NOTIFICATION TRACKING ==========
+  notificationsSent: {
+    chefAssigned: { type: Boolean, default: false },
+    deliveryAssigned: { type: Boolean, default: false },
+    orderReady: { type: Boolean, default: false },
+    orderDelivered: { type: Boolean, default: false }
+  }
 
-// Update the updatedAt timestamp before saving
-// orderSchema.pre('save', function(next) {
-//   this.updatedAt = Date.now();
-//   next();
-// });
+}, { timestamps: true });
 
-// Method to add status history
+// Methods
 orderSchema.methods.addStatusHistory = function(status, userId, notes = '') {
   this.statusHistory.push({
     status,
@@ -199,52 +194,32 @@ orderSchema.methods.addStatusHistory = function(status, userId, notes = '') {
   });
 };
 
-// Method to calculate cooking time
 orderSchema.methods.calculateCookingTime = function() {
   if (this.cookingStartedAt && this.cookingCompletedAt) {
     const diffMs = this.cookingCompletedAt - this.cookingStartedAt;
-    this.cookingTime = Math.round(diffMs / 60000); // Convert to minutes
+    this.cookingTime = Math.round(diffMs / 60000);
   }
 };
 
-// Method to calculate delivery time
 orderSchema.methods.calculateDeliveryTime = function() {
   if (this.deliveryStartedAt && this.deliveryCompletedAt) {
     const diffMs = this.deliveryCompletedAt - this.deliveryStartedAt;
-    this.deliveryTime = Math.round(diffMs / 60000); // Convert to minutes
+    this.deliveryTime = Math.round(diffMs / 60000);
   }
 };
 
-// Method to calculate preparation time
-orderSchema.methods.calculatePreparationTime = function() {
-  if (this.preparationStartedAt && this.cookingCompletedAt) {
-    const diffMs = this.cookingCompletedAt - this.preparationStartedAt;
-    this.preparationTime = Math.round(diffMs / 60000); // Convert to minutes
-  }
-};
-
-// Virtual for total items count
+// Virtuals
 orderSchema.virtual('totalItems').get(function() {
   return this.items.reduce((total, item) => total + item.quantity, 0);
 });
 
-// Virtual for order age in minutes
-orderSchema.virtual('age').get(function() {
-  return Math.round((Date.now() - this.createdAt) / 60000);
-});
-
-// Ensure virtuals are included when converting to JSON
 orderSchema.set('toJSON', { virtuals: true });
 orderSchema.set('toObject', { virtuals: true });
 
-// Add timestamps
-orderSchema.set('timestamps', true);
-
-// Indexes for better query performance
+// Indexes
 orderSchema.index({ status: 1, createdAt: -1 });
 orderSchema.index({ assignedChef: 1, status: 1 });
 orderSchema.index({ assignedDelivery: 1, status: 1 });
-orderSchema.index({ paymentStatus: 1 });
 orderSchema.index({ customer: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Order', orderSchema);

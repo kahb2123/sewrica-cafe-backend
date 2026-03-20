@@ -1,80 +1,783 @@
+// src/routes/staffRoutes.js
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/authMiddleware');
-const {
-  getStaffByRole,
-  assignChef,
-  assignDelivery,
-  startCooking,
-  completeCooking,
-  startDelivery,
-  completeDelivery,
-  getChefReport,
-  getDeliveryReport,
-  getStaffSummary
-} = require('../controllers/staffController');
+const Order = require('../models/Order');
+const User = require('../models/User');
 
-// All routes require authentication
+// Apply protect middleware to ALL staff routes
 router.use(protect);
 
-// ========== STAFF MANAGEMENT ==========
+// Debug middleware to log user info for all staff routes
+router.use((req, res, next) => {
+  console.log('📡 Staff API called:', req.method, req.originalUrl);
+  console.log('   User:', req.user ? { id: req.user._id, role: req.user.role, email: req.user.email } : 'No user');
+  next();
+});
 
-// @desc    Get staff by role
-// @route   GET /api/staff/:role
-// @access  Private (admin, cashier)
-router.get('/:role', getStaffByRole);
+// ========== GET STAFF BY ROLE ==========
+router.get('/:role', async (req, res) => {
+  try {
+    const { role } = req.params;
+    const validRoles = ['cook', 'delivery', 'cashier'];
+    
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({ message: 'Invalid role' });
+    }
 
-// ========== ASSIGNMENT ROUTES ==========
+    const staff = await User.find({ 
+      role: role,
+      isActive: true 
+    }).select('name email phone');
 
-// @desc    Assign order to chef
-// @route   POST /api/staff/assign-chef/:orderId
-// @access  Private (admin, cashier)
-router.post('/assign-chef/:orderId', assignChef);
+    res.json({
+      success: true,
+      count: staff.length,
+      staff
+    });
+  } catch (error) {
+    console.error('Get staff error:', error);
+    res.status(500).json({ message: 'Failed to fetch staff' });
+  }
+});
 
-// @desc    Assign order to delivery person
-// @route   POST /api/staff/assign-delivery/:orderId
-// @access  Private (admin, cashier)
-router.post('/assign-delivery/:orderId', assignDelivery);
+// ========== STAFF ORDER ENDPOINTS ==========
 
-// ========== COOK ROUTES ==========
+// Get orders assigned to current chef (active cooking orders)
+router.get('/orders/cooking', async (req, res) => {
+  try {
+    console.log('👨‍🍳 Chef orders requested by:', req.user._id, 'Role:', req.user.role);
+    
+    // Check if user is a cook/chef
+    if (req.user.role !== 'cook' && req.user.role !== 'chef') {
+      console.log('❌ User is not a cook/chef, role:', req.user.role);
+      return res.status(403).json({ message: 'Access denied. Cooks only.' });
+    }
 
-// @desc    Start cooking
-// @route   POST /api/staff/start-cooking/:orderId
-// @access  Private (cook only)
-router.post('/start-cooking/:orderId', startCooking);
+    const orders = await Order.find({
+      assignedChef: req.user._id,
+      status: { $in: ['confirmed', 'preparing'] }
+    })
+    .sort({ createdAt: -1 })
+    .populate('customer', 'name email phone');
 
-// @desc    Complete cooking
-// @route   POST /api/staff/complete-cooking/:orderId
-// @access  Private (cook only)
-router.post('/complete-cooking/:orderId', completeCooking);
+    console.log(`📦 Found ${orders.length} orders for chef`);
+    
+    res.json({
+      success: true,
+      orders: orders
+    });
+  } catch (error) {
+    console.error('Error fetching chef orders:', error);
+    res.status(500).json({ message: 'Failed to fetch orders' });
+  }
+});
 
-// ========== DELIVERY ROUTES ==========
+// Get orders assigned to current delivery person (active deliveries)
+router.get('/orders/delivery', async (req, res) => {
+  try {
+    console.log('🚚 Delivery orders requested by:', req.user._id);
+    
+    if (req.user.role !== 'delivery') {
+      return res.status(403).json({ message: 'Access denied. Delivery only.' });
+    }
 
-// @desc    Start delivery
-// @route   POST /api/staff/start-delivery/:orderId
-// @access  Private (delivery only)
-router.post('/start-delivery/:orderId', startDelivery);
+    const orders = await Order.find({
+      assignedDelivery: req.user._id,
+      status: { $in: ['ready', 'out-for-delivery'] }
+    })
+    .sort({ createdAt: -1 })
+    .populate('customer', 'name email phone address');
 
-// @desc    Complete delivery
-// @route   POST /api/staff/complete-delivery/:orderId
-// @access  Private (delivery only)
-router.post('/complete-delivery/:orderId', completeDelivery);
+    res.json({
+      success: true,
+      orders: orders
+    });
+  } catch (error) {
+    console.error('Error fetching delivery orders:', error);
+    res.status(500).json({ message: 'Failed to fetch orders' });
+  }
+});
 
-// ========== REPORT ROUTES ==========
+// Get completed orders for chef
+router.get('/orders/cooking/completed', async (req, res) => {
+  try {
+    if (req.user.role !== 'cook' && req.user.role !== 'chef') {
+      return res.status(403).json({ message: 'Access denied. Cooks only.' });
+    }
 
-// @desc    Get chef performance report
-// @route   GET /api/staff/reports/chef/:chefId
-// @access  Private (admin only)
-router.get('/reports/chef/:chefId', getChefReport);
+    const orders = await Order.find({
+      assignedChef: req.user._id,
+      status: { $in: ['ready', 'delivered'] }
+    })
+    .sort({ createdAt: -1 })
+    .limit(20)
+    .populate('customer', 'name email phone');
 
-// @desc    Get delivery person report
-// @route   GET /api/staff/reports/delivery/:deliveryId
-// @access  Private (admin only)
-router.get('/reports/delivery/:deliveryId', getDeliveryReport);
+    res.json({
+      success: true,
+      orders: orders
+    });
+  } catch (error) {
+    console.error('Error fetching completed orders:', error);
+    res.status(500).json({ message: 'Failed to fetch completed orders' });
+  }
+});
 
-// @desc    Get staff summary report
-// @route   GET /api/staff/reports/summary
-// @access  Private (admin only)
-router.get('/reports/summary', getStaffSummary);
+// Get completed deliveries for delivery person
+router.get('/orders/delivery/completed', async (req, res) => {
+  try {
+    if (req.user.role !== 'delivery') {
+      return res.status(403).json({ message: 'Access denied. Delivery only.' });
+    }
+
+    const orders = await Order.find({
+      assignedDelivery: req.user._id,
+      status: 'delivered'
+    })
+    .sort({ createdAt: -1 })
+    .limit(20)
+    .populate('customer', 'name email phone');
+
+    res.json({
+      success: true,
+      orders: orders
+    });
+  } catch (error) {
+    console.error('Error fetching completed deliveries:', error);
+    res.status(500).json({ message: 'Failed to fetch completed deliveries' });
+  }
+});
+
+// ========== CHEF ACCEPTANCE ENDPOINTS ==========
+
+// Chef accepts order
+router.post('/orders/:orderId/chef-accept', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { notes } = req.body;
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    if (order.assignedChef?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'This order is not assigned to you' });
+    }
+
+    if (order.chefAccepted) {
+      return res.status(400).json({ message: 'Order already accepted' });
+    }
+
+    order.chefAccepted = true;
+    order.chefAcceptedAt = new Date();
+    if (notes) order.chefNotes = notes;
+    order.status = 'confirmed';
+    if (order.addStatusHistory) {
+      order.addStatusHistory('confirmed', req.user._id, `Chef accepted order: ${notes || 'No notes'}`);
+    }
+
+    await order.save();
+    await order.populate('customer', 'name email');
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to('staff-admin').emit('chef-accepted', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        chefName: req.user.name,
+        acceptedAt: order.chefAcceptedAt
+      });
+      
+      io.to(`order-${order._id}`).emit('order-status-updated', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        status: 'confirmed',
+        message: `Your order has been accepted by chef ${req.user.name}!`,
+        updatedAt: new Date()
+      });
+    }
+
+    res.json({ success: true, message: 'Order accepted successfully', order });
+  } catch (error) {
+    console.error('Chef accept error:', error);
+    res.status(500).json({ message: 'Failed to accept order' });
+  }
+});
+
+// Chef rejects order
+router.post('/orders/:orderId/chef-reject', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { reason } = req.body;
+
+    if (!reason) {
+      return res.status(400).json({ message: 'Rejection reason is required' });
+    }
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    if (order.assignedChef?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'This order is not assigned to you' });
+    }
+
+    order.chefRejected = true;
+    order.chefRejectionReason = reason;
+    order.chefRejectedAt = new Date();
+    order.status = 'cancelled';
+    if (order.addStatusHistory) {
+      order.addStatusHistory('cancelled', req.user._id, `Chef rejected order: ${reason}`);
+    }
+
+    await order.save();
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to('staff-admin').emit('chef-rejected', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        chefName: req.user.name,
+        reason,
+        rejectedAt: order.chefRejectedAt
+      });
+      
+      io.to(`order-${order._id}`).emit('order-status-updated', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        status: 'cancelled',
+        message: `Your order has been rejected. Reason: ${reason}`,
+        updatedAt: new Date()
+      });
+    }
+
+    res.json({ success: true, message: 'Order rejected', order });
+  } catch (error) {
+    console.error('Chef reject error:', error);
+    res.status(500).json({ message: 'Failed to reject order' });
+  }
+});
+
+// ========== DELIVERY ACCEPTANCE ENDPOINTS ==========
+
+// Delivery accepts order
+router.post('/orders/:orderId/delivery-accept', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { notes } = req.body;
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    if (order.assignedDelivery?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'This order is not assigned to you' });
+    }
+
+    if (order.deliveryAccepted) {
+      return res.status(400).json({ message: 'Delivery already accepted' });
+    }
+
+    order.deliveryAccepted = true;
+    order.deliveryAcceptedAt = new Date();
+    if (notes) order.deliveryNotes = notes;
+    order.status = 'out-for-delivery';
+    if (order.addStatusHistory) {
+      order.addStatusHistory('out-for-delivery', req.user._id, `Delivery accepted: ${notes || 'No notes'}`);
+    }
+
+    await order.save();
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to('staff-admin').emit('delivery-accepted', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        deliveryName: req.user.name,
+        acceptedAt: order.deliveryAcceptedAt
+      });
+      
+      io.to(`order-${order._id}`).emit('order-status-updated', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        status: 'out-for-delivery',
+        message: `Your order is out for delivery with ${req.user.name}!`,
+        updatedAt: new Date()
+      });
+    }
+
+    res.json({ success: true, message: 'Delivery accepted successfully', order });
+  } catch (error) {
+    console.error('Delivery accept error:', error);
+    res.status(500).json({ message: 'Failed to accept delivery' });
+  }
+});
+
+// Delivery rejects order
+router.post('/orders/:orderId/delivery-reject', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { reason } = req.body;
+
+    if (!reason) {
+      return res.status(400).json({ message: 'Rejection reason is required' });
+    }
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    if (order.assignedDelivery?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'This order is not assigned to you' });
+    }
+
+    order.deliveryRejected = true;
+    order.deliveryRejectionReason = reason;
+    order.deliveryRejectedAt = new Date();
+    order.status = 'cancelled';
+    if (order.addStatusHistory) {
+      order.addStatusHistory('cancelled', req.user._id, `Delivery rejected: ${reason}`);
+    }
+
+    await order.save();
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to('staff-admin').emit('delivery-rejected', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        deliveryName: req.user.name,
+        reason,
+        rejectedAt: order.deliveryRejectedAt
+      });
+      
+      io.to(`order-${order._id}`).emit('order-status-updated', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        status: 'cancelled',
+        message: `Your delivery has been rejected. Reason: ${reason}`,
+        updatedAt: new Date()
+      });
+    }
+
+    res.json({ success: true, message: 'Delivery rejected', order });
+  } catch (error) {
+    console.error('Delivery reject error:', error);
+    res.status(500).json({ message: 'Failed to reject delivery' });
+  }
+});
+
+// ========== COOKING ENDPOINTS ==========
+
+// Chef starts cooking
+router.post('/start-cooking/:orderId', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    if (order.assignedChef?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'This order is not assigned to you' });
+    }
+
+    if (order.status !== 'confirmed') {
+      return res.status(400).json({ message: 'Order must be confirmed to start cooking' });
+    }
+
+    order.cookingStartedAt = new Date();
+    order.status = 'preparing';
+    if (order.addStatusHistory) {
+      order.addStatusHistory('preparing', req.user._id, 'Started cooking');
+    }
+
+    await order.save();
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to('staff-admin').emit('cooking-started', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        chefName: req.user.name,
+        startedAt: order.cookingStartedAt
+      });
+      
+      io.to(`order-${order._id}`).emit('order-status-updated', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        status: 'preparing',
+        message: 'Your order is being prepared!',
+        updatedAt: new Date()
+      });
+    }
+
+    res.json({ success: true, message: 'Started cooking', order });
+  } catch (error) {
+    console.error('Start cooking error:', error);
+    res.status(500).json({ message: 'Failed to start cooking' });
+  }
+});
+
+// Chef completes cooking
+router.post('/complete-cooking/:orderId', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    if (order.assignedChef?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'This order is not assigned to you' });
+    }
+
+    if (order.status !== 'preparing') {
+      return res.status(400).json({ message: 'Order must be preparing to complete cooking' });
+    }
+
+    order.cookingCompletedAt = new Date();
+    // Calculate cooking time if method exists
+    if (order.calculateCookingTime) {
+      order.calculateCookingTime();
+    } else if (order.cookingStartedAt && order.cookingCompletedAt) {
+      const diffMs = order.cookingCompletedAt - order.cookingStartedAt;
+      order.cookingTime = Math.round(diffMs / 60000);
+    }
+    
+    order.status = 'ready';
+    if (order.addStatusHistory) {
+      order.addStatusHistory('ready', req.user._id, `Cooking completed in ${order.cookingTime} minutes`);
+    }
+
+    await order.save();
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to('staff-admin').to('staff-delivery').emit('order-ready', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        cookingTime: order.cookingTime,
+        completedAt: order.cookingCompletedAt
+      });
+      
+      io.to(`order-${order._id}`).emit('order-status-updated', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        status: 'ready',
+        message: 'Your order is ready for pickup/delivery!',
+        updatedAt: new Date()
+      });
+    }
+
+    res.json({ success: true, message: 'Cooking completed', order });
+  } catch (error) {
+    console.error('Complete cooking error:', error);
+    res.status(500).json({ message: 'Failed to complete cooking' });
+  }
+});
+
+// ========== DELIVERY ENDPOINTS ==========
+
+// Delivery starts delivery
+router.post('/start-delivery/:orderId', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    if (order.assignedDelivery?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'This order is not assigned to you' });
+    }
+
+    if (order.status !== 'ready') {
+      return res.status(400).json({ message: 'Order must be ready to start delivery' });
+    }
+
+    order.deliveryStartedAt = new Date();
+    order.status = 'out-for-delivery';
+    if (order.addStatusHistory) {
+      order.addStatusHistory('out-for-delivery', req.user._id, 'Started delivery');
+    }
+
+    await order.save();
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to('staff-admin').emit('delivery-started', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        deliveryName: req.user.name,
+        startedAt: order.deliveryStartedAt
+      });
+      
+      io.to(`order-${order._id}`).emit('order-status-updated', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        status: 'out-for-delivery',
+        message: 'Your order is on the way!',
+        updatedAt: new Date()
+      });
+    }
+
+    res.json({ success: true, message: 'Started delivery', order });
+  } catch (error) {
+    console.error('Start delivery error:', error);
+    res.status(500).json({ message: 'Failed to start delivery' });
+  }
+});
+
+// Delivery completes delivery
+router.post('/complete-delivery/:orderId', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    if (order.assignedDelivery?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'This order is not assigned to you' });
+    }
+
+    if (order.status !== 'out-for-delivery') {
+      return res.status(400).json({ message: 'Order must be out for delivery to complete' });
+    }
+
+    order.deliveryCompletedAt = new Date();
+    // Calculate delivery time if method exists
+    if (order.calculateDeliveryTime) {
+      order.calculateDeliveryTime();
+    } else if (order.deliveryStartedAt && order.deliveryCompletedAt) {
+      const diffMs = order.deliveryCompletedAt - order.deliveryStartedAt;
+      order.deliveryTime = Math.round(diffMs / 60000);
+    }
+    
+    order.status = 'delivered';
+    if (order.addStatusHistory) {
+      order.addStatusHistory('delivered', req.user._id, `Delivery completed in ${order.deliveryTime} minutes`);
+    }
+
+    await order.save();
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to('staff-admin').emit('order-delivered', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        deliveryName: req.user.name,
+        deliveryTime: order.deliveryTime,
+        completedAt: order.deliveryCompletedAt
+      });
+      
+      io.to(`order-${order._id}`).emit('order-status-updated', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        status: 'delivered',
+        message: 'Your order has been delivered! Thank you for ordering from Sewrica Cafe!',
+        updatedAt: new Date()
+      });
+    }
+
+    res.json({ success: true, message: 'Delivery completed', order });
+  } catch (error) {
+    console.error('Complete delivery error:', error);
+    res.status(500).json({ message: 'Failed to complete delivery' });
+  }
+});
+
+// ========== STAFF STATS ENDPOINTS ==========
+
+// Get chef stats
+router.get('/stats/chef', async (req, res) => {
+  try {
+    if (req.user.role !== 'cook' && req.user.role !== 'chef') {
+      return res.status(403).json({ message: 'Access denied. Cooks only.' });
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    const todayOrders = await Order.countDocuments({
+      assignedChef: req.user._id,
+      createdAt: { $gte: today, $lt: tomorrow }
+    });
+
+    const pendingOrders = await Order.countDocuments({
+      assignedChef: req.user._id,
+      status: 'preparing'
+    });
+
+    const completedOrders = await Order.countDocuments({
+      assignedChef: req.user._id,
+      status: { $in: ['ready', 'delivered'] }
+    });
+
+    res.json({
+      success: true,
+      stats: {
+        todayOrders,
+        pendingOrders,
+        completedOrders,
+        totalOrders: todayOrders + pendingOrders + completedOrders
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching chef stats:', error);
+    res.status(500).json({ message: 'Failed to fetch stats' });
+  }
+});
+
+// Get delivery stats
+router.get('/stats/delivery', async (req, res) => {
+  try {
+    if (req.user.role !== 'delivery') {
+      return res.status(403).json({ message: 'Access denied. Delivery only.' });
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    const todayDeliveries = await Order.countDocuments({
+      assignedDelivery: req.user._id,
+      deliveryStartedAt: { $gte: today, $lt: tomorrow }
+    });
+
+    const pendingDeliveries = await Order.countDocuments({
+      assignedDelivery: req.user._id,
+      status: 'out-for-delivery'
+    });
+
+    const completedDeliveries = await Order.countDocuments({
+      assignedDelivery: req.user._id,
+      status: 'delivered'
+    });
+
+    res.json({
+      success: true,
+      stats: {
+        todayDeliveries,
+        pendingDeliveries,
+        completedDeliveries,
+        totalDeliveries: todayDeliveries + pendingDeliveries + completedDeliveries
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching delivery stats:', error);
+    res.status(500).json({ message: 'Failed to fetch stats' });
+  }
+});
+
+// ========== REPORT ENDPOINTS ==========
+
+// Get chef performance report
+router.get('/reports/chef/:chefId', async (req, res) => {
+  try {
+    const { chefId } = req.params;
+    const { startDate, endDate } = req.query;
+
+    const dateFilter = {};
+    if (startDate && endDate) {
+      dateFilter.cookingCompletedAt = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate)
+      };
+    }
+
+    const orders = await Order.find({
+      assignedChef: chefId,
+      cookingCompletedAt: { $ne: null },
+      ...dateFilter
+    });
+
+    let totalItemsCooked = 0;
+    let totalCookingTime = 0;
+    const itemsBreakdown = {};
+
+    orders.forEach(order => {
+      totalCookingTime += order.cookingTime || 0;
+      order.items.forEach(item => {
+        totalItemsCooked += item.quantity;
+        itemsBreakdown[item.name] = (itemsBreakdown[item.name] || 0) + item.quantity;
+      });
+    });
+
+    const avgCookingTime = orders.length > 0 ? (totalCookingTime / orders.length).toFixed(1) : 0;
+
+    res.json({
+      success: true,
+      summary: {
+        totalOrders: orders.length,
+        totalItemsCooked,
+        totalCookingTime,
+        averageCookingTime: avgCookingTime
+      },
+      itemsBreakdown
+    });
+  } catch (error) {
+    console.error('Get chef report error:', error);
+    res.status(500).json({ message: 'Failed to get chef report' });
+  }
+});
+
+// Get delivery performance report
+router.get('/reports/delivery/:deliveryId', async (req, res) => {
+  try {
+    const { deliveryId } = req.params;
+    const { startDate, endDate } = req.query;
+
+    const dateFilter = {};
+    if (startDate && endDate) {
+      dateFilter.deliveryCompletedAt = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate)
+      };
+    }
+
+    const orders = await Order.find({
+      assignedDelivery: deliveryId,
+      deliveryCompletedAt: { $ne: null },
+      ...dateFilter
+    });
+
+    let totalDeliveryTime = 0;
+    let totalAmount = 0;
+
+    orders.forEach(order => {
+      totalDeliveryTime += order.deliveryTime || 0;
+      totalAmount += order.totalAmount || 0;
+    });
+
+    const avgDeliveryTime = orders.length > 0 ? (totalDeliveryTime / orders.length).toFixed(1) : 0;
+
+    res.json({
+      success: true,
+      summary: {
+        totalDeliveries: orders.length,
+        totalAmount,
+        totalDeliveryTime,
+        averageDeliveryTime: avgDeliveryTime
+      }
+    });
+  } catch (error) {
+    console.error('Get delivery report error:', error);
+    res.status(500).json({ message: 'Failed to get delivery report' });
+  }
+});
 
 module.exports = router;

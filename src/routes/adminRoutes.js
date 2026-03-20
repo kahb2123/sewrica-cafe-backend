@@ -567,5 +567,117 @@ router.get('/reports/monthly', async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
+// src/routes/adminRoutes.js (Add these to your existing adminRoutes)
+
+// Add these endpoints to your existing adminRoutes.js file
+
+// @desc    Assign chef to order
+// @route   POST /api/admin/orders/:id/assign-chef
+router.post('/orders/:id/assign-chef', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { chefId, notes } = req.body;
+
+    const order = await Order.findById(id);
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    const chef = await User.findOne({ _id: chefId, role: 'cook', isActive: true });
+    if (!chef) {
+      return res.status(400).json({ message: 'Chef not found or not available' });
+    }
+
+    order.assignedChef = chefId;
+    order.assignedAt.chef = new Date();
+    if (notes) order.chefNotes = notes;
+    order.addStatusHistory('confirmed', req.user._id, `Assigned to chef: ${chef.name}`);
+
+    await order.save();
+    await order.populate('customer', 'name email');
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`chef-${chefId}`).emit('order-assigned', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        customerName: order.customerName,
+        totalAmount: order.totalAmount,
+        items: order.items,
+        assignedAt: order.assignedAt.chef
+      });
+      
+      io.to('staff-admin').emit('order-assigned-chef', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        chefName: chef.name
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Order assigned to chef ${chef.name}`,
+      order
+    });
+  } catch (error) {
+    console.error('Assign chef error:', error);
+    res.status(500).json({ message: 'Failed to assign chef' });
+  }
+});
+
+// @desc    Assign delivery to order
+// @route   POST /api/admin/orders/:id/assign-delivery
+router.post('/orders/:id/assign-delivery', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { deliveryId, notes } = req.body;
+
+    const order = await Order.findById(id);
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    const delivery = await User.findOne({ _id: deliveryId, role: 'delivery', isActive: true });
+    if (!delivery) {
+      return res.status(400).json({ message: 'Delivery person not found or not available' });
+    }
+
+    order.assignedDelivery = deliveryId;
+    order.assignedAt.delivery = new Date();
+    if (notes) order.deliveryNotes = notes;
+    order.addStatusHistory('ready', req.user._id, `Assigned to delivery: ${delivery.name}`);
+
+    await order.save();
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`delivery-${deliveryId}`).emit('order-assigned', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        customerName: order.customerName,
+        customerPhone: order.customerPhone,
+        deliveryAddress: order.deliveryAddress,
+        totalAmount: order.totalAmount,
+        items: order.items,
+        assignedAt: order.assignedAt.delivery
+      });
+      
+      io.to('staff-admin').emit('order-assigned-delivery', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        deliveryName: delivery.name
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Order assigned to delivery person ${delivery.name}`,
+      order
+    });
+  } catch (error) {
+    console.error('Assign delivery error:', error);
+    res.status(500).json({ message: 'Failed to assign delivery' });
+  }
+});
 
 module.exports = router;
