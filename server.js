@@ -33,7 +33,7 @@ const allowedOrigins = [
   'http://127.0.0.1:3000'
 ];
 
-// Main CORS configuration
+// Main CORS configuration - this handles OPTIONS preflight automatically
 app.use(cors({
   origin: function(origin, callback) {
     // Allow requests with no origin (like mobile apps, curl, etc)
@@ -75,8 +75,7 @@ app.use(cors({
   maxAge: 86400 // 24 hours
 }));
 
-// Pre-flight requests handling
-app.options('*', cors());
+// DO NOT ADD app.options('*', cors()) - it causes errors and is unnecessary!
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
