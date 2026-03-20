@@ -45,7 +45,7 @@ const orderSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'confirmed', 'preparing', 'ready', 'out-for-delivery', 'delivered', 'cancelled'],
+    enum: ['pending', 'confirmed', 'preparing', 'cooking', 'ready', 'out-for-delivery', 'delivered', 'cancelled'],
     default: 'pending'
   },
   paymentStatus: {
@@ -68,7 +68,7 @@ const orderSchema = new mongoose.Schema({
     required: true
   },
   
-  // ========== STAFF ASSIGNMENTS ==========
+  // Staff assignments
   assignedChef: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -80,7 +80,7 @@ const orderSchema = new mongoose.Schema({
     default: null
   },
   
-  // ========== STAFF ACCEPTANCE/REJECTION ==========
+  // Acceptance fields
   chefAccepted: {
     type: Boolean,
     default: false
@@ -92,6 +92,10 @@ const orderSchema = new mongoose.Schema({
   },
   chefRejectionReason: String,
   chefRejectedAt: Date,
+  chefNotes: {
+    type: String,
+    default: ''
+  },
   
   deliveryAccepted: {
     type: Boolean,
@@ -104,14 +108,18 @@ const orderSchema = new mongoose.Schema({
   },
   deliveryRejectionReason: String,
   deliveryRejectedAt: Date,
+  deliveryNotes: {
+    type: String,
+    default: ''
+  },
   
-  // ========== ASSIGNMENT TIMESTAMPS ==========
+  // Assignment timestamps
   assignedAt: {
     chef: Date,
     delivery: Date
   },
   
-  // ========== TIME TRACKING ==========
+  // Time tracking
   cookingStartedAt: Date,
   cookingCompletedAt: Date,
   cookingTime: {
@@ -120,26 +128,14 @@ const orderSchema = new mongoose.Schema({
   },
   deliveryStartedAt: Date,
   deliveryCompletedAt: Date,
+  
+  // FIXED: Changed from Number to String
   deliveryTime: {
-    type: Number,
-    default: 0
-  },
-  deliveryTimeEstimate: {
     type: String,
     default: 'asap'
   },
   
-  // ========== STAFF NOTES ==========
-  chefNotes: {
-    type: String,
-    default: ''
-  },
-  deliveryNotes: {
-    type: String,
-    default: ''
-  },
-  
-  // ========== DELIVERY DETAILS ==========
+  // Delivery details
   deliveryAddress: {
     street: String,
     area: String,
@@ -149,7 +145,7 @@ const orderSchema = new mongoose.Schema({
     additionalInfo: String
   },
   
-  // ========== ORDER METADATA ==========
+  // Order metadata
   orderSource: {
     type: String,
     enum: ['web', 'mobile', 'walk-in', 'phone'],
@@ -157,11 +153,11 @@ const orderSchema = new mongoose.Schema({
   },
   specialRequests: String,
   
-  // ========== STATUS HISTORY ==========
+  // Status history
   statusHistory: [{
     status: {
       type: String,
-      enum: ['pending', 'confirmed', 'preparing', 'ready', 'out-for-delivery', 'delivered', 'cancelled']
+      enum: ['pending', 'confirmed', 'preparing', 'cooking', 'ready', 'out-for-delivery', 'delivered', 'cancelled']
     },
     changedBy: {
       type: mongoose.Schema.Types.ObjectId,
@@ -174,7 +170,7 @@ const orderSchema = new mongoose.Schema({
     notes: String
   }],
 
-  // ========== NOTIFICATION TRACKING ==========
+  // Notification tracking
   notificationsSent: {
     chefAssigned: { type: Boolean, default: false },
     deliveryAssigned: { type: Boolean, default: false },
@@ -186,6 +182,7 @@ const orderSchema = new mongoose.Schema({
 
 // Methods
 orderSchema.methods.addStatusHistory = function(status, userId, notes = '') {
+  if (!this.statusHistory) this.statusHistory = [];
   this.statusHistory.push({
     status,
     changedBy: userId,
@@ -204,7 +201,7 @@ orderSchema.methods.calculateCookingTime = function() {
 orderSchema.methods.calculateDeliveryTime = function() {
   if (this.deliveryStartedAt && this.deliveryCompletedAt) {
     const diffMs = this.deliveryCompletedAt - this.deliveryStartedAt;
-    this.deliveryTime = Math.round(diffMs / 60000);
+    this.deliveryTime = Math.round(diffMs / 60000).toString();
   }
 };
 
