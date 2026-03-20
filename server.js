@@ -1,3 +1,4 @@
+// server.js
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -12,43 +13,100 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 
+// ========== CORS CONFIGURATION ==========
+const allowedOrigins = [
+  // Production URLs
+  'https://sewrica-cafe-frontend.vercel.app',
+  'https://sewrica-cafe-frontend-git-main-kahb2123s-projects.vercel.app',
+  'https://sewrica-cafe-frontend-3gmdpiv67-kahb2123s-projects.vercel.app',
+  'https://kahb2123.github.io',
+  'https://sewrica-cafe-backend.onrender.com',
+  
+  // Local development URLs (any port)
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:5175',
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5174',
+  'http://127.0.0.1:3000'
+];
+
+// Main CORS configuration
+app.use(cors({
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, etc)
+    if (!origin) {
+      return callback(null, true);
+    }
+    
+    // For local development, allow ALL localhost origins (any port)
+    if (origin.match(/^http:\/\/localhost:\d+$/) || origin.match(/^http:\/\/127\.0\.0\.1:\d+$/)) {
+      console.log('✅ CORS allowed localhost:', origin);
+      return callback(null, true);
+    }
+    
+    // Check if origin is in allowed list
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      console.log('✅ CORS allowed:', origin);
+      return callback(null, true);
+    }
+    
+    // Check if origin matches vercel.app pattern
+    if (origin && origin.match && origin.match(/\.vercel\.app$/)) {
+      console.log('✅ CORS allowed Vercel:', origin);
+      return callback(null, true);
+    }
+    
+    // In development, allow all (fallback)
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('⚠️ CORS allowed (development mode):', origin);
+      return callback(null, true);
+    }
+    
+    console.log('❌ CORS blocked origin:', origin);
+    callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  exposedHeaders: ['Authorization'],
+  maxAge: 86400 // 24 hours
+}));
+
+// Pre-flight requests handling
+app.options('*', cors());
+
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Serve static files
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 // ========== SOCKET.IO SETUP ==========
 const io = socketIo(server, {
   cors: {
     origin: function(origin, callback) {
-      const allowedOrigins = [
-        'http://localhost:5173',
-        'http://localhost:3000',
-        'https://kahb2123.github.io',
-        'https://sewrica-cafe-backend.onrender.com',
-        'https://sewrica-cafe-frontend-git-main-kahb2123s-projects.vercel.app',
-        'https://sewrica-cafe-frontend-3gmdpiv67-kahb2123s-projects.vercel.app',
-        /\.vercel\.app$/
-      ];
-      
-      // Allow requests with no origin (like mobile apps, curl, etc)
       if (!origin) return callback(null, true);
-      
-      // Check if origin is in allowed list
+      if (origin.match(/^http:\/\/localhost:\d+$/) || origin.match(/^http:\/\/127\.0\.0\.1:\d+$/)) {
+        return callback(null, true);
+      }
       if (allowedOrigins.indexOf(origin) !== -1) {
         return callback(null, true);
       }
-      
-      // Check if origin matches vercel.app pattern
       if (origin && origin.match && origin.match(/\.vercel\.app$/)) {
         return callback(null, true);
       }
-      
-      // Allow all in development
       callback(null, true);
     },
     credentials: true,
     methods: ['GET', 'POST']
   },
-  transports: ['websocket', 'polling'], // Add both transports for better compatibility
-  allowEIO3: true, // Enable compatibility with older clients
-  pingTimeout: 60000, // Increase timeout for slow connections
-  pingInterval: 25000 // Ping interval
+  transports: ['websocket', 'polling'],
+  allowEIO3: true,
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
 // Make io accessible to routes
@@ -65,7 +123,6 @@ io.on('connection', (socket) => {
     socket.join(roomName);
     console.log(`📦 Customer joined room: ${roomName}`);
     
-    // Send confirmation
     socket.emit('registered', { 
       orderId, 
       room: roomName,
@@ -79,7 +136,6 @@ io.on('connection', (socket) => {
     socket.join(roomName);
     console.log(`👨‍🍳 Staff joined room: ${roomName} (ID: ${staffId})`);
     
-    // Send confirmation
     socket.emit('staff-registered', {
       role,
       room: roomName,
@@ -87,79 +143,50 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Handle disconnection
+  // Chef specific registration
+  socket.on('register-chef', (chefId) => {
+    socket.join(`chef-${chefId}`);
+    socket.join('staff-cook');
+    console.log(`👨‍🍳 Chef registered: ${chefId}`);
+  });
+
+  // Delivery specific registration
+  socket.on('register-delivery', (deliveryId) => {
+    socket.join(`delivery-${deliveryId}`);
+    socket.join('staff-delivery');
+    console.log(`🚚 Delivery registered: ${deliveryId}`);
+  });
+
+  // Admin registration
+  socket.on('register-admin', (adminId) => {
+    socket.join('staff-admin');
+    console.log(`👑 Admin registered: ${adminId}`);
+  });
+
+  // Cashier registration
+  socket.on('register-cashier', (cashierId) => {
+    socket.join('staff-cashier');
+    console.log(`💰 Cashier registered: ${cashierId}`);
+  });
+
   socket.on('disconnect', (reason) => {
     console.log('🔌 Client disconnected:', socket.id, 'Reason:', reason);
   });
 
-  // Handle errors
   socket.on('error', (error) => {
     console.error('Socket error:', error);
   });
-
-  // Ping/pong for connection health
-  socket.on('ping', (callback) => {
-    if (typeof callback === 'function') {
-      callback();
-    }
-  });
 });
 
-// ========== END SOCKET.IO SETUP ==========
-
-// ========== CORS CONFIGURATION ==========
-const allowedOrigins = [
-  'http://localhost:5173',
-  'http://localhost:3000',
-  'https://kahb2123.github.io',
-  'https://sewrica-cafe-backend.onrender.com',
-  'https://sewrica-cafe-frontend-git-main-kahb2123s-projects.vercel.app',
-  'https://sewrica-cafe-frontend-3gmdpiv67-kahb2123s-projects.vercel.app',
-  /\.vercel\.app$/
-];
-
-// Main CORS configuration
-app.use(cors({
-  origin: function(origin, callback) {
-    // Allow requests with no origin (like mobile apps, curl, etc)
-    if (!origin) return callback(null, true);
-    
-    // Check if origin is in allowed list
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      return callback(null, true);
-    }
-    
-    // Check if origin matches vercel.app pattern
-    if (origin && origin.match && origin.match(/\.vercel\.app$/)) {
-      return callback(null, true);
-    }
-    
-    // In development, allow all
-    if (process.env.NODE_ENV !== 'production') {
-      return callback(null, true);
-    }
-    
-    callback(new Error('Not allowed by CORS'));
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
-}));
-
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// Serve static files
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
 // MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/sewrica_cafe', {
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/sewrica_cafe';
+mongoose.connect(MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
   .then(() => {
     console.log('✅ MongoDB Connected');
-    console.log('📊 Database Name: sewrica_cafe');
+    console.log('📊 Database Name:', mongoose.connection.name);
   })
   .catch(err => {
     console.error('❌ MongoDB Connection Error:', err.message);
@@ -184,13 +211,16 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/staff', staffRoutes);
 app.use('/api/setup', setupRoutes);
 
-// Test route
+// ========== API ROUTES ==========
+
+// Root route
 app.get('/', (req, res) => {
   res.json({ 
     message: 'Welcome to SEWRICA Cafe API',
     status: 'running',
     timestamp: new Date().toISOString(),
     socketIO: 'enabled',
+    environment: process.env.NODE_ENV || 'development',
     endpoints: {
       auth: '/api/auth',
       menu: '/api/menu',
@@ -198,39 +228,26 @@ app.get('/', (req, res) => {
       admin: '/api/admin',
       staff: '/api/staff',
       setup: '/api/setup',
+      health: '/api/health',
       socketHealth: '/api/socket-health'
     }
   });
 });
 
-// Test uploads route
-app.get('/test-uploads', (req, res) => {
-  const uploadsDir = path.join(__dirname, 'uploads');
-  
-  fs.readdir(uploadsDir, (err, files) => {
-    if (err) {
-      return res.json({ error: err.message });
-    }
-    res.json({
-      message: 'Uploads folder contents',
-      files: files,
-      path: uploadsDir
-    });
-  });
-});
-
-// Health check
+// Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     uploads: fs.existsSync(path.join(__dirname, 'uploads')),
-    socketIO: 'enabled'
+    socketIO: 'enabled',
+    environment: process.env.NODE_ENV || 'development',
+    cors: 'enabled for localhost and production domains'
   });
 });
 
-// ========== SOCKET.IO HEALTH CHECK ==========
+// Socket.IO health check
 app.get('/api/socket-health', (req, res) => {
   res.json({
     status: 'Socket.io running',
@@ -240,7 +257,6 @@ app.get('/api/socket-health', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
-// ========== END SOCKET.IO HEALTH CHECK ==========
 
 // Create uploads folder if it doesn't exist
 const uploadsDir = path.join(__dirname, 'uploads');
@@ -249,57 +265,40 @@ if (!fs.existsSync(uploadsDir)) {
   console.log('📁 Created uploads folder');
 }
 
-// ===== DEBUG ROUTE - PLACED HERE AFTER ALL ROUTES =====
+// Debug route to see all registered routes
 app.get('/api/debug-routes', (req, res) => {
   try {
-    // Check if router exists
-    if (!app._router || !app._router.stack) {
-      return res.json({ 
-        message: 'Router not initialized yet. Try again after server starts.',
-        routes: [] 
+    const routes = [];
+    
+    function extractRoutes(stack, basePath = '') {
+      if (!stack) return;
+      
+      stack.forEach(layer => {
+        if (layer.route) {
+          const methods = Object.keys(layer.route.methods).join(', ').toUpperCase();
+          routes.push({
+            path: basePath + layer.route.path,
+            methods: methods,
+            type: 'route'
+          });
+        } else if (layer.name === 'router' && layer.handle && layer.handle.stack) {
+          let routerPath = '';
+          if (layer.regexp) {
+            const regexpStr = layer.regexp.toString();
+            const match = regexpStr.match(/\/\^\\\/([^\\/]+)/);
+            if (match && match[1]) {
+              routerPath = '/' + match[1].replace(/\\\//g, '/');
+            }
+          }
+          extractRoutes(layer.handle.stack, basePath + routerPath);
+        }
       });
     }
     
-    const routes = [];
+    if (app._router && app._router.stack) {
+      extractRoutes(app._router.stack);
+    }
     
-    app._router.stack.forEach(layer => {
-      // Handle regular routes (like '/', '/test-uploads', etc.)
-      if (layer.route) {
-        const methods = Object.keys(layer.route.methods).join(', ').toUpperCase();
-        routes.push({
-          path: layer.route.path,
-          methods: methods,
-          type: 'direct'
-        });
-      }
-      // Handle router middleware (our /api routes)
-      else if (layer.name === 'router' && layer.handle && layer.handle.stack) {
-        // Get the base path from the layer's regexp
-        let basePath = '';
-        if (layer.regexp) {
-          const regexpStr = layer.regexp.toString();
-          // Extract the base path from regex like /^\\/api\\/auth\\/?(?=\\/|$)/i
-          const match = regexpStr.match(/\/\^\\\/([^\\/]+)/);
-          if (match && match[1]) {
-            basePath = '/' + match[1].replace(/\\\//g, '/');
-          }
-        }
-        
-        // Iterate through the router's stack
-        layer.handle.stack.forEach(nestedLayer => {
-          if (nestedLayer.route) {
-            const methods = Object.keys(nestedLayer.route.methods).join(', ').toUpperCase();
-            routes.push({
-              path: basePath + nestedLayer.route.path,
-              methods: methods,
-              type: 'nested'
-            });
-          }
-        });
-      }
-    });
-    
-    // Sort routes by path
     routes.sort((a, b) => a.path.localeCompare(b.path));
     
     res.json({
@@ -311,18 +310,17 @@ app.get('/api/debug-routes', (req, res) => {
     console.error('Debug route error:', error);
     res.status(500).json({ 
       message: 'Error generating route list',
-      error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      error: error.message
     });
   }
 });
-// ===== END DEBUG ROUTE =====
 
-// 404 handler (this should be LAST)
+// 404 handler
 app.use((req, res) => {
   res.status(404).json({ 
     message: 'Route not found',
-    path: req.originalUrl
+    path: req.originalUrl,
+    method: req.method
   });
 });
 
@@ -342,6 +340,8 @@ server.listen(PORT, () => {
   console.log(`🔌 Socket.io server initialized`);
   console.log(`🌐 WebSocket endpoint: http://localhost:${PORT}/socket.io/`);
   console.log(`📊 Socket.io health check: http://localhost:${PORT}/api/socket-health`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🔗 CORS enabled for all localhost ports and production domains`);
   
   if (fs.existsSync(uploadsDir)) {
     const files = fs.readdirSync(uploadsDir);
@@ -350,62 +350,9 @@ server.listen(PORT, () => {
   
   console.log('\n📡 Available API endpoints:');
   console.log('   GET  /                    - API Info');
-  console.log('   GET  /api/health           - Health check');
-  console.log('   GET  /api/socket-health     - Socket.io status');
-  console.log('   GET  /api/debug-routes      - Debug routes');
-  
-  // Auth endpoints
-  console.log('\n🔐 AUTH ENDPOINTS:');
-  console.log('   POST /api/auth/register    - Register');
-  console.log('   POST /api/auth/login       - Login');
-  console.log('   GET  /api/auth/profile     - Get profile');
-  
-  // Menu endpoints
-  console.log('\n🍽️ MENU ENDPOINTS:');
-  console.log('   GET  /api/menu              - Get menu items');
-  console.log('   POST /api/menu              - Create menu item (admin)');
-  console.log('   PUT  /api/menu/:id          - Update menu item (admin)');
-  console.log('   DELETE /api/menu/:id        - Delete menu item (admin)');
-  
-  // Order endpoints
-  console.log('\n📦 ORDER ENDPOINTS:');
-  console.log('   POST /api/orders            - Create new order');
-  console.log('   GET  /api/orders/my-orders  - Get user orders');
-  console.log('   GET  /api/orders/:id        - Get single order');
-  console.log('   PATCH /api/orders/:id/cancel - Cancel order');
-  console.log('   PATCH /api/orders/:id/status - Update order status (staff)');
-  
-  // Payment endpoints
-  console.log('\n💰 PAYMENT ENDPOINTS:');
-  console.log('   POST /api/payments/create-payment-intent - Create Stripe payment intent');
-  console.log('   POST /api/payments/webhook - Stripe webhook');
-  console.log('   GET  /api/payments/payment-methods - Get saved payment methods');
-  console.log('   POST /api/payments/cash-payment - Process cash payment');
-  
-  // Admin endpoints
-  console.log('\n👑 ADMIN ENDPOINTS:');
-  console.log('   GET  /api/admin/stats       - Admin stats');
-  console.log('   GET  /api/admin/orders      - Get all orders');
-  console.log('   GET  /api/admin/users       - Get all users');
-  console.log('   GET  /api/admin/reports/daily - Daily reports');
-  
-  // Staff endpoints
-  console.log('\n👨‍🍳 STAFF MANAGEMENT ENDPOINTS:');
-  console.log('   GET  /api/staff/:role        - Get staff by role');
-  console.log('   POST /api/staff/assign-chef/:orderId - Assign order to chef');
-  console.log('   POST /api/staff/assign-delivery/:orderId - Assign order to delivery');
-  console.log('   POST /api/staff/start-cooking/:orderId - Chef starts cooking');
-  console.log('   POST /api/staff/complete-cooking/:orderId - Chef completes cooking');
-  console.log('   POST /api/staff/start-delivery/:orderId - Delivery starts');
-  console.log('   POST /api/staff/complete-delivery/:orderId - Delivery completes');
-  
-  // Staff Reports
-  console.log('\n📊 STAFF REPORTS:');
-  console.log('   GET  /api/staff/reports/summary - Staff performance summary');
-  console.log('   GET  /api/staff/reports/chef/:chefId - Chef performance report');
-  console.log('   GET  /api/staff/reports/delivery/:deliveryId - Delivery report');
-  
-  // Setup
-  console.log('\n⚙️ SETUP:');
-  console.log('   ✅ GET  /api/setup/create-admin - Create admin user (ONE-TIME)');
+  console.log('   GET  /api/health          - Health check');
+  console.log('   GET  /api/socket-health   - Socket.io status');
+  console.log('   GET  /api/debug-routes    - Debug routes');
+  console.log('   GET  /api/setup/create-admin - Create admin user');
+  console.log('   GET  /api/setup/create-staff - Create staff users');
 });
