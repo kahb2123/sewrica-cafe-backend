@@ -68,6 +68,27 @@ const orderSchema = new mongoose.Schema({
     required: true
   },
   
+  // ========== LOTTERY SYSTEM ==========
+  lotteryTicketNumber: {
+    type: String,
+    unique: true,
+    sparse: true,
+    default: null
+  },
+  lotteryEligible: {
+    type: Boolean,
+    default: true
+  },
+  lotteryWon: {
+    type: Boolean,
+    default: false
+  },
+  lotteryPrizeClaimed: {
+    type: Boolean,
+    default: false
+  },
+  lotteryPrizeClaimedAt: Date,
+  
   // Staff assignments
   assignedChef: {
     type: mongoose.Schema.Types.ObjectId,
@@ -129,7 +150,6 @@ const orderSchema = new mongoose.Schema({
   deliveryStartedAt: Date,
   deliveryCompletedAt: Date,
   
-  // FIXED: Changed from Number to String
   deliveryTime: {
     type: String,
     default: 'asap'
@@ -218,5 +238,6 @@ orderSchema.index({ status: 1, createdAt: -1 });
 orderSchema.index({ assignedChef: 1, status: 1 });
 orderSchema.index({ assignedDelivery: 1, status: 1 });
 orderSchema.index({ customer: 1, createdAt: -1 });
+orderSchema.index({ lotteryTicketNumber: 1 });
 
 module.exports = mongoose.model('Order', orderSchema);

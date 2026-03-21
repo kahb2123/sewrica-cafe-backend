@@ -1,6 +1,8 @@
+// src/controllers/orderController.js
 const Order = require('../models/Order');
 const User = require('../models/User');
 const MenuItem = require('../models/MenuItem');
+const LotteryService = require('../services/lotteryService');
 
 // @desc    Create new order
 // @route   POST /api/orders
@@ -71,6 +73,9 @@ const createOrder = async (req, res) => {
       paymentStatus = 'pending';
     }
 
+    // ========== GENERATE LOTTERY TICKET NUMBER ==========
+    const lotteryTicketNumber = LotteryService.generateTicketNumber(orderNumber, user._id);
+
     // Create order with initial status
     const order = await Order.create({
       orderNumber,
@@ -91,12 +96,14 @@ const createOrder = async (req, res) => {
       amountReceived: null,
       change: null,
       paidAt: null,
+      lotteryTicketNumber, // Add lottery ticket
+      lotteryEligible: true,
       // Initialize status history
       statusHistory: [{
         status: 'pending',
         changedBy: user._id,
         changedAt: new Date(),
-        notes: 'Order placed'
+        notes: `Order placed - Lottery Ticket: ${lotteryTicketNumber}`
       }]
     });
 
@@ -111,9 +118,10 @@ const createOrder = async (req, res) => {
         orderNumber: order.orderNumber,
         customerName: order.customerName,
         totalAmount: order.totalAmount,
-        createdAt: order.createdAt
+        createdAt: order.createdAt,
+        lotteryTicketNumber: order.lotteryTicketNumber // Include lottery ticket
       });
-      console.log(`📢 New order notification sent for order #${order.orderNumber}`);
+      console.log(`📢 New order notification sent for order #${order.orderNumber} with lottery ticket ${lotteryTicketNumber}`);
     }
 
     res.status(201).json({
@@ -128,7 +136,8 @@ const createOrder = async (req, res) => {
         status: order.status,
         paymentMethod: order.paymentMethod,
         paymentStatus: order.paymentStatus,
-        createdAt: order.createdAt
+        createdAt: order.createdAt,
+        lotteryTicketNumber: order.lotteryTicketNumber
       }
     });
 
@@ -138,7 +147,7 @@ const createOrder = async (req, res) => {
   }
 };
 
-// ========== UPDATE ORDER STATUS - ADDED BACK ==========
+// ========== UPDATE ORDER STATUS ==========
 // @desc    Update order status (for staff)
 // @route   PATCH /api/orders/:id/status
 // @access  Private (admin, cashier, cook, delivery)
@@ -154,7 +163,7 @@ const updateOrderStatus = async (req, res) => {
     console.log('   User ID:', req.user._id);
 
     // Validate status
-    const validStatuses = ['pending', 'confirmed', 'preparing', 'ready', 'delivered', 'cancelled'];
+    const validStatuses = ['pending', 'confirmed', 'preparing', 'cooking', 'ready', 'out-for-delivery', 'delivered', 'cancelled'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ message: 'Invalid status' });
     }
@@ -177,25 +186,31 @@ const updateOrderStatus = async (req, res) => {
       admin: {
         pending: ['confirmed', 'cancelled'],
         confirmed: ['preparing', 'cancelled'],
-        preparing: ['ready', 'cancelled'],
-        ready: ['delivered', 'cancelled'],
+        preparing: ['cooking', 'cancelled'],
+        cooking: ['ready', 'cancelled'],
+        ready: ['out-for-delivery', 'delivered', 'cancelled'],
+        'out-for-delivery': ['delivered', 'cancelled'],
         delivered: [],
         cancelled: []
       },
       cashier: {
         pending: ['confirmed', 'cancelled'],
         confirmed: ['preparing', 'cancelled'],
-        preparing: ['ready', 'cancelled'],
-        ready: ['delivered', 'cancelled'],
+        preparing: ['cooking', 'cancelled'],
+        cooking: ['ready', 'cancelled'],
+        ready: ['out-for-delivery', 'delivered', 'cancelled'],
+        'out-for-delivery': ['delivered', 'cancelled'],
         delivered: [],
         cancelled: []
       },
       cook: {
         confirmed: ['preparing'],
-        preparing: ['ready']
+        preparing: ['cooking'],
+        cooking: ['ready']
       },
       delivery: {
-        ready: ['delivered']
+        ready: ['out-for-delivery'],
+        'out-for-delivery': ['delivered']
       }
     };
 
@@ -239,6 +254,25 @@ const updateOrderStatus = async (req, res) => {
       order.paymentStatus = 'failed';
     }
 
+    // Check if order becomes eligible for lottery (when delivered)
+    if (status === 'delivered' && oldStatus !== 'delivered') {
+      // Order is now eligible for lottery
+      if (order.lotteryEligible && !order.lotteryWon) {
+        console.log(`🎫 Order #${order.orderNumber} is now eligible for lottery! Ticket: ${order.lotteryTicketNumber}`);
+        
+        // Notify admin about eligible lottery ticket
+        const io = req.app.get('io');
+        if (io) {
+          io.to('staff-admin').emit('lottery-eligible', {
+            orderId: order._id,
+            orderNumber: order.orderNumber,
+            lotteryTicketNumber: order.lotteryTicketNumber,
+            customerName: order.customerName
+          });
+        }
+      }
+    }
+
     await order.save();
     console.log(`✅ Order ${order.orderNumber} status updated: ${oldStatus} -> ${status}`);
 
@@ -257,11 +291,14 @@ const updateOrderStatus = async (req, res) => {
         oldStatus,
         notes: notes || null,
         updatedAt: new Date(),
+        lotteryTicketNumber: order.lotteryTicketNumber,
         message: status === 'confirmed' ? 'Your order has been accepted!' :
                 status === 'cancelled' ? 'Your order has been cancelled' :
                 status === 'preparing' ? 'Your order is being prepared!' :
+                status === 'cooking' ? 'Your order is being cooked!' :
                 status === 'ready' ? 'Your order is ready!' :
-                status === 'delivered' ? 'Your order has been delivered!' :
+                status === 'out-for-delivery' ? 'Your order is on the way!' :
+                status === 'delivered' ? `Your order has been delivered! Your lottery ticket ${order.lotteryTicketNumber} is now active!` :
                 `Your order is now ${status}`
       });
 
@@ -289,7 +326,6 @@ const updateOrderStatus = async (req, res) => {
     });
   }
 };
-// ========== END UPDATE ORDER STATUS ==========
 
 // @desc    Get user's orders
 // @route   GET /api/orders/my-orders
@@ -303,7 +339,12 @@ const getUserOrders = async (req, res) => {
     res.json({
       success: true,
       count: orders.length,
-      data: orders
+      data: orders.map(order => ({
+        ...order.toObject(),
+        lotteryTicketNumber: order.lotteryTicketNumber,
+        lotteryWon: order.lotteryWon,
+        lotteryEligible: order.lotteryEligible && order.status === 'delivered'
+      }))
     });
   } catch (error) {
     console.error('Get user orders error:', error);
@@ -332,7 +373,12 @@ const getOrder = async (req, res) => {
 
     res.json({
       success: true,
-      data: order
+      data: {
+        ...order.toObject(),
+        lotteryTicketNumber: order.lotteryTicketNumber,
+        lotteryWon: order.lotteryWon,
+        lotteryEligible: order.lotteryEligible && order.status === 'delivered'
+      }
     });
   } catch (error) {
     console.error('Get order error:', error);
@@ -376,7 +422,10 @@ const cancelOrder = async (req, res) => {
     if (order.paymentStatus === 'processing') {
       order.paymentStatus = 'failed';
     }
-    
+
+    // Mark lottery ticket as ineligible
+    order.lotteryEligible = false;
+
     await order.save();
 
     // ========== SOCKET.IO: Notify staff about cancellation ==========
@@ -437,7 +486,8 @@ const confirmPayment = async (req, res) => {
         orderId: order._id,
         orderNumber: order.orderNumber,
         paymentMethod: order.paymentMethod,
-        paidAt: order.paidAt
+        paidAt: order.paidAt,
+        lotteryTicketNumber: order.lotteryTicketNumber
       });
     }
 
@@ -448,7 +498,8 @@ const confirmPayment = async (req, res) => {
         _id: order._id,
         orderNumber: order.orderNumber,
         paymentStatus: order.paymentStatus,
-        paidAt: order.paidAt
+        paidAt: order.paidAt,
+        lotteryTicketNumber: order.lotteryTicketNumber
       }
     });
   } catch (error) {
@@ -511,7 +562,8 @@ const processCashPayment = async (req, res) => {
         paymentMethod: 'cash',
         amountReceived,
         change,
-        paidAt: order.paidAt
+        paidAt: order.paidAt,
+        lotteryTicketNumber: order.lotteryTicketNumber
       });
     }
 
@@ -525,7 +577,8 @@ const processCashPayment = async (req, res) => {
         amountReceived,
         change,
         paidAt: order.paidAt,
-        paymentStatus: order.paymentStatus
+        paymentStatus: order.paymentStatus,
+        lotteryTicketNumber: order.lotteryTicketNumber
       }
     });
   } catch (error) {
@@ -554,7 +607,10 @@ const getOrdersByPaymentStatus = async (req, res) => {
     res.json({
       success: true,
       count: orders.length,
-      orders
+      orders: orders.map(order => ({
+        ...order.toObject(),
+        lotteryTicketNumber: order.lotteryTicketNumber
+      }))
     });
   } catch (error) {
     console.error('Get orders by payment status error:', error);
@@ -569,7 +625,7 @@ const getPaymentStatus = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const order = await Order.findById(id).select('paymentStatus paymentMethod paidAt amountReceived change customer');
+    const order = await Order.findById(id).select('paymentStatus paymentMethod paidAt amountReceived change customer lotteryTicketNumber lotteryWon');
     
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
@@ -587,7 +643,9 @@ const getPaymentStatus = async (req, res) => {
       paymentMethod: order.paymentMethod,
       paidAt: order.paidAt,
       amountReceived: order.amountReceived,
-      change: order.change
+      change: order.change,
+      lotteryTicketNumber: order.lotteryTicketNumber,
+      lotteryWon: order.lotteryWon
     });
   } catch (error) {
     console.error('Get payment status error:', error);
@@ -635,6 +693,7 @@ const refundPayment = async (req, res) => {
     order.paymentStatus = 'refunded';
     order.refundReason = reason;
     order.refundedAt = new Date();
+    order.lotteryEligible = false; // Make lottery ticket ineligible
     await order.save();
 
     // ========== SOCKET.IO: Notify about refund ==========
@@ -645,7 +704,8 @@ const refundPayment = async (req, res) => {
         orderNumber: order.orderNumber,
         paymentStatus: 'refunded',
         refundedAt: order.refundedAt,
-        reason
+        reason,
+        lotteryTicketNumber: order.lotteryTicketNumber
       });
     }
 
@@ -657,7 +717,8 @@ const refundPayment = async (req, res) => {
         orderNumber: order.orderNumber,
         paymentStatus: order.paymentStatus,
         refundedAt: order.refundedAt,
-        refundReason: reason
+        refundReason: reason,
+        lotteryTicketNumber: order.lotteryTicketNumber
       }
     });
   } catch (error) {
