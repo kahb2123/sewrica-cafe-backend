@@ -1,23 +1,24 @@
+// src/routes/adminRoutes.js
 const express = require('express');
 const router = express.Router();
 const MenuItem = require('../models/MenuItem');
 const Order = require('../models/Order');
 const User = require('../models/User');
 const { protect, adminOnly } = require('../middleware/authMiddleware');
-const bcrypt = require('bcryptjs'); // Make sure to add this import
+const bcrypt = require('bcryptjs');
 
 // Protect all admin routes - only admins can access
-router.use(protect); // First check if user is authenticated
-router.use(adminOnly); // Then check if user is admin
+router.use(protect);
+router.use(adminOnly);
+
+// ========== STAFF MANAGEMENT ==========
 
 // @desc    Create new staff member
 // @route   POST /api/admin/staff
-// @access  Private/Admin
 router.post('/staff', async (req, res) => {
   try {
     const { name, email, phone, password, role } = req.body;
     
-    // Validate required fields
     if (!name || !email || !phone || !password || !role) {
       return res.status(400).json({ 
         success: false,
@@ -25,7 +26,6 @@ router.post('/staff', async (req, res) => {
       });
     }
 
-    // Validate role
     const validRoles = ['cook', 'delivery', 'cashier', 'admin'];
     if (!validRoles.includes(role)) {
       return res.status(400).json({ 
@@ -34,7 +34,6 @@ router.post('/staff', async (req, res) => {
       });
     }
     
-    // Check if user already exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       return res.status(400).json({ 
@@ -43,11 +42,9 @@ router.post('/staff', async (req, res) => {
       });
     }
     
-    // Hash password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
     
-    // Create new staff user
     const staff = await User.create({
       name,
       email,
@@ -57,7 +54,6 @@ router.post('/staff', async (req, res) => {
       isActive: true
     });
     
-    // Remove password from response
     const staffResponse = staff.toObject();
     delete staffResponse.password;
     
@@ -77,7 +73,6 @@ router.post('/staff', async (req, res) => {
 
 // @desc    Get all staff members
 // @route   GET /api/admin/staff
-// @access  Private/Admin
 router.get('/staff', async (req, res) => {
   try {
     const { role } = req.query;
@@ -86,7 +81,6 @@ router.get('/staff', async (req, res) => {
     if (role && ['cook', 'delivery', 'cashier', 'admin'].includes(role)) {
       query.role = role;
     } else if (!role) {
-      // If no role specified, get all staff roles
       query.role = { $in: ['cook', 'delivery', 'cashier', 'admin'] };
     }
     
@@ -108,154 +102,188 @@ router.get('/staff', async (req, res) => {
   }
 });
 
-// @desc    Update staff member
-// @route   PUT /api/admin/staff/:id
-// @access  Private/Admin
-router.put('/staff/:id', async (req, res) => {
+// ========== ASSIGNMENT ENDPOINTS ==========
+
+// @desc    Assign chef to order
+// @route   POST /api/admin/orders/:orderId/assign-chef
+router.post('/orders/:orderId/assign-chef', async (req, res) => {
   try {
-    const { name, email, phone, role, isActive } = req.body;
-    
-    const staff = await User.findById(req.params.id);
-    if (!staff) {
+    const { orderId } = req.params;
+    const { chefId, notes } = req.body;
+
+    console.log('👨‍🍳 Assigning chef to order:', orderId);
+    console.log('   Chef ID:', chefId);
+    console.log('   Notes:', notes);
+
+    const order = await Order.findById(orderId);
+    if (!order) {
       return res.status(404).json({ 
-        success: false,
-        message: 'Staff member not found' 
+        success: false, 
+        message: 'Order not found' 
       });
     }
-    
-    // Update fields
-    if (name) staff.name = name;
-    if (email) staff.email = email;
-    if (phone) staff.phone = phone;
-    if (role) {
-      const validRoles = ['cook', 'delivery', 'cashier', 'admin'];
-      if (validRoles.includes(role)) {
-        staff.role = role;
-      }
+
+    const chef = await User.findOne({ _id: chefId, role: 'cook', isActive: true });
+    if (!chef) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Chef not found or not available' 
+      });
     }
-    if (isActive !== undefined) staff.isActive = isActive;
+
+    if (order.assignedChef) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Order already has an assigned chef' 
+      });
+    }
+
+    order.assignedChef = chefId;
+    if (!order.assignedAt) order.assignedAt = {};
+    order.assignedAt.chef = new Date();
+    if (notes) order.chefNotes = notes;
+    order.status = 'confirmed';
     
-    await staff.save();
-    
-    const updatedStaff = staff.toObject();
-    delete updatedStaff.password;
-    
+    if (!order.statusHistory) order.statusHistory = [];
+    order.statusHistory.push({
+      status: 'confirmed',
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      notes: `Assigned to chef: ${chef.name}${notes ? ` (${notes})` : ''}`
+    });
+
+    await order.save();
+    await order.populate('customer', 'name email');
+    await order.populate('assignedChef', 'name email');
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`chef-${chefId}`).emit('order-assigned', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        customerName: order.customerName,
+        customerPhone: order.customerPhone,
+        totalAmount: order.totalAmount,
+        items: order.items.map(item => ({ name: item.name, quantity: item.quantity })),
+        assignedAt: order.assignedAt.chef
+      });
+      
+      io.to('staff-admin').emit('order-assigned-chef', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        chefName: chef.name
+      });
+    }
+
     res.json({
       success: true,
-      message: 'Staff member updated successfully',
-      staff: updatedStaff
+      message: `Order assigned to chef ${chef.name}`,
+      order
     });
   } catch (error) {
-    console.error('Error updating staff:', error);
+    console.error('❌ Assign chef error:', error);
     res.status(500).json({ 
-      success: false,
-      message: 'Failed to update staff member' 
+      success: false, 
+      message: 'Failed to assign chef',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
 
-// @desc    Delete staff member
-// @route   DELETE /api/admin/staff/:id
-// @access  Private/Admin
-router.delete('/staff/:id', async (req, res) => {
+// @desc    Assign delivery to order
+// @route   POST /api/admin/orders/:orderId/assign-delivery
+router.post('/orders/:orderId/assign-delivery', async (req, res) => {
   try {
-    const staff = await User.findById(req.params.id);
-    
-    if (!staff) {
+    const { orderId } = req.params;
+    const { deliveryId, notes } = req.body;
+
+    console.log('🚚 Assigning delivery to order:', orderId);
+    console.log('   Delivery ID:', deliveryId);
+    console.log('   Notes:', notes);
+
+    const order = await Order.findById(orderId);
+    if (!order) {
       return res.status(404).json({ 
-        success: false,
-        message: 'Staff member not found' 
+        success: false, 
+        message: 'Order not found' 
       });
     }
+
+    const delivery = await User.findOne({ _id: deliveryId, role: 'delivery', isActive: true });
+    if (!delivery) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Delivery person not found or not available' 
+      });
+    }
+
+    if (order.assignedDelivery) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Order already has an assigned delivery person' 
+      });
+    }
+
+    if (order.status !== 'ready') {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Order must be ready before assigning delivery' 
+      });
+    }
+
+    order.assignedDelivery = deliveryId;
+    if (!order.assignedAt) order.assignedAt = {};
+    order.assignedAt.delivery = new Date();
+    if (notes) order.deliveryNotes = notes;
     
-    // Optional: Check if staff has active orders before deleting
-    const activeOrders = await Order.findOne({
-      $or: [
-        { assignedChef: staff._id, status: { $in: ['preparing', 'confirmed'] } },
-        { assignedDelivery: staff._id, status: { $in: ['ready', 'out-for-delivery'] } }
-      ]
+    if (!order.statusHistory) order.statusHistory = [];
+    order.statusHistory.push({
+      status: 'ready',
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      notes: `Assigned to delivery: ${delivery.name}${notes ? ` (${notes})` : ''}`
     });
-    
-    if (activeOrders) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot delete staff member with active orders. Reassign orders first.'
+
+    await order.save();
+    await order.populate('customer', 'name email phone address');
+    await order.populate('assignedDelivery', 'name email phone');
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`delivery-${deliveryId}`).emit('order-assigned', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        customerName: order.customerName,
+        customerPhone: order.customerPhone,
+        deliveryAddress: order.deliveryAddress,
+        totalAmount: order.totalAmount,
+        items: order.items.map(item => ({ name: item.name, quantity: item.quantity })),
+        assignedAt: order.assignedAt.delivery
+      });
+      
+      io.to('staff-admin').emit('order-assigned-delivery', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        deliveryName: delivery.name
       });
     }
-    
-    await staff.deleteOne();
-    
+
     res.json({
       success: true,
-      message: 'Staff member deleted successfully'
+      message: `Order assigned to delivery person ${delivery.name}`,
+      order
     });
   } catch (error) {
-    console.error('Error deleting staff:', error);
+    console.error('❌ Assign delivery error:', error);
     res.status(500).json({ 
-      success: false,
-      message: 'Failed to delete staff member' 
+      success: false, 
+      message: 'Failed to assign delivery',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
 
-// @desc    Get staff statistics
-// @route   GET /api/admin/staff/stats
-// @access  Private/Admin
-router.get('/staff/stats', async (req, res) => {
-  try {
-    const stats = await User.aggregate([
-      {
-        $match: {
-          role: { $in: ['cook', 'delivery', 'cashier', 'admin'] }
-        }
-      },
-      {
-        $group: {
-          _id: '$role',
-          count: { $sum: 1 },
-          active: {
-            $sum: { $cond: ['$isActive', 1, 0] }
-          }
-        }
-      }
-    ]);
-    
-    const formattedStats = {
-      cooks: { total: 0, active: 0 },
-      delivery: { total: 0, active: 0 },
-      cashiers: { total: 0, active: 0 },
-      admins: { total: 0, active: 0 }
-    };
-    
-    stats.forEach(stat => {
-      switch(stat._id) {
-        case 'cook':
-          formattedStats.cooks = { total: stat.count, active: stat.active };
-          break;
-        case 'delivery':
-          formattedStats.delivery = { total: stat.count, active: stat.active };
-          break;
-        case 'cashier':
-          formattedStats.cashiers = { total: stat.count, active: stat.active };
-          break;
-        case 'admin':
-          formattedStats.admins = { total: stat.count, active: stat.active };
-          break;
-      }
-    });
-    
-    res.json({
-      success: true,
-      stats: formattedStats
-    });
-  } catch (error) {
-    console.error('Error fetching staff stats:', error);
-    res.status(500).json({ 
-      success: false,
-      message: 'Failed to fetch staff statistics' 
-    });
-  }
-});
+// ========== DASHBOARD STATS ==========
 
 // @desc    Get dashboard statistics
 // @route   GET /api/admin/stats
@@ -335,6 +363,8 @@ router.get('/orders', async (req, res) => {
     const orders = await Order.find(query)
       .sort({ createdAt: -1 })
       .populate('customer', 'name email phone')
+      .populate('assignedChef', 'name email')
+      .populate('assignedDelivery', 'name email')
       .lean();
     
     res.json(orders);
@@ -402,7 +432,7 @@ router.put('/users/:id/role', async (req, res) => {
   }
 });
 
-// @desc    Toggle user status (if you have status field)
+// @desc    Toggle user status
 // @route   PATCH /api/admin/users/:id/toggle-status
 router.patch('/users/:id/toggle-status', async (req, res) => {
   try {
@@ -411,8 +441,6 @@ router.patch('/users/:id/toggle-status', async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
     
-    // If you have a status field, toggle it
-    // If not, you can toggle an 'active' field or just return success
     user.status = user.status === 'active' ? 'inactive' : 'active';
     await user.save();
     
@@ -422,6 +450,8 @@ router.patch('/users/:id/toggle-status', async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
+
+// ========== REPORT ENDPOINTS ==========
 
 // @desc    Get daily report
 // @route   GET /api/admin/reports/daily
@@ -442,7 +472,6 @@ router.get('/reports/daily', async (req, res) => {
     const totalRevenue = orders.reduce((sum, order) => sum + order.totalAmount, 0);
     const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
     
-    // Category breakdown
     const categoryBreakdown = {};
     orders.forEach(order => {
       order.items.forEach(item => {
@@ -455,19 +484,18 @@ router.get('/reports/daily', async (req, res) => {
       });
     });
     
-    // Delivery breakdown (if you have assignedTo field)
     const deliveryBreakdown = {};
     orders.forEach(order => {
-      if (order.assignedTo) {
-        if (!deliveryBreakdown[order.assignedTo]) {
-          deliveryBreakdown[order.assignedTo] = { ordersCount: 0, totalAmount: 0 };
+      if (order.assignedDelivery) {
+        const deliveryName = order.assignedDelivery.name || order.assignedDelivery;
+        if (!deliveryBreakdown[deliveryName]) {
+          deliveryBreakdown[deliveryName] = { ordersCount: 0, totalAmount: 0 };
         }
-        deliveryBreakdown[order.assignedTo].ordersCount += 1;
-        deliveryBreakdown[order.assignedTo].totalAmount += order.totalAmount;
+        deliveryBreakdown[deliveryName].ordersCount += 1;
+        deliveryBreakdown[deliveryName].totalAmount += order.totalAmount;
       }
     });
     
-    // Top items
     const itemSales = {};
     orders.forEach(order => {
       order.items.forEach(item => {
@@ -565,118 +593,6 @@ router.get('/reports/monthly', async (req, res) => {
   } catch (error) {
     console.error('Monthly report error:', error);
     res.status(500).json({ message: 'Server error' });
-  }
-});
-// src/routes/adminRoutes.js (Add these to your existing adminRoutes)
-
-// Add these endpoints to your existing adminRoutes.js file
-
-// @desc    Assign chef to order
-// @route   POST /api/admin/orders/:id/assign-chef
-router.post('/orders/:id/assign-chef', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { chefId, notes } = req.body;
-
-    const order = await Order.findById(id);
-    if (!order) {
-      return res.status(404).json({ message: 'Order not found' });
-    }
-
-    const chef = await User.findOne({ _id: chefId, role: 'cook', isActive: true });
-    if (!chef) {
-      return res.status(400).json({ message: 'Chef not found or not available' });
-    }
-
-    order.assignedChef = chefId;
-    order.assignedAt.chef = new Date();
-    if (notes) order.chefNotes = notes;
-    order.addStatusHistory('confirmed', req.user._id, `Assigned to chef: ${chef.name}`);
-
-    await order.save();
-    await order.populate('customer', 'name email');
-
-    const io = req.app.get('io');
-    if (io) {
-      io.to(`chef-${chefId}`).emit('order-assigned', {
-        orderId: order._id,
-        orderNumber: order.orderNumber,
-        customerName: order.customerName,
-        totalAmount: order.totalAmount,
-        items: order.items,
-        assignedAt: order.assignedAt.chef
-      });
-      
-      io.to('staff-admin').emit('order-assigned-chef', {
-        orderId: order._id,
-        orderNumber: order.orderNumber,
-        chefName: chef.name
-      });
-    }
-
-    res.json({
-      success: true,
-      message: `Order assigned to chef ${chef.name}`,
-      order
-    });
-  } catch (error) {
-    console.error('Assign chef error:', error);
-    res.status(500).json({ message: 'Failed to assign chef' });
-  }
-});
-
-// @desc    Assign delivery to order
-// @route   POST /api/admin/orders/:id/assign-delivery
-router.post('/orders/:id/assign-delivery', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { deliveryId, notes } = req.body;
-
-    const order = await Order.findById(id);
-    if (!order) {
-      return res.status(404).json({ message: 'Order not found' });
-    }
-
-    const delivery = await User.findOne({ _id: deliveryId, role: 'delivery', isActive: true });
-    if (!delivery) {
-      return res.status(400).json({ message: 'Delivery person not found or not available' });
-    }
-
-    order.assignedDelivery = deliveryId;
-    order.assignedAt.delivery = new Date();
-    if (notes) order.deliveryNotes = notes;
-    order.addStatusHistory('ready', req.user._id, `Assigned to delivery: ${delivery.name}`);
-
-    await order.save();
-
-    const io = req.app.get('io');
-    if (io) {
-      io.to(`delivery-${deliveryId}`).emit('order-assigned', {
-        orderId: order._id,
-        orderNumber: order.orderNumber,
-        customerName: order.customerName,
-        customerPhone: order.customerPhone,
-        deliveryAddress: order.deliveryAddress,
-        totalAmount: order.totalAmount,
-        items: order.items,
-        assignedAt: order.assignedAt.delivery
-      });
-      
-      io.to('staff-admin').emit('order-assigned-delivery', {
-        orderId: order._id,
-        orderNumber: order.orderNumber,
-        deliveryName: delivery.name
-      });
-    }
-
-    res.json({
-      success: true,
-      message: `Order assigned to delivery person ${delivery.name}`,
-      order
-    });
-  } catch (error) {
-    console.error('Assign delivery error:', error);
-    res.status(500).json({ message: 'Failed to assign delivery' });
   }
 });
 

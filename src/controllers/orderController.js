@@ -138,6 +138,7 @@ const createOrder = async (req, res) => {
   }
 };
 
+// ========== UPDATE ORDER STATUS - ADDED BACK ==========
 // @desc    Update order status (for staff)
 // @route   PATCH /api/orders/:id/status
 // @access  Private (admin, cashier, cook, delivery)
@@ -145,6 +146,12 @@ const updateOrderStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, notes } = req.body;
+
+    console.log('📝 Update order status request:');
+    console.log('   Order ID:', id);
+    console.log('   New Status:', status);
+    console.log('   User Role:', req.user.role);
+    console.log('   User ID:', req.user._id);
 
     // Validate status
     const validStatuses = ['pending', 'confirmed', 'preparing', 'ready', 'delivered', 'cancelled'];
@@ -161,6 +168,9 @@ const updateOrderStatus = async (req, res) => {
     // Check permissions based on user role
     const userRole = req.user.role;
     const currentStatus = order.status;
+
+    console.log('   Current Status:', currentStatus);
+    console.log('   Order Number:', order.orderNumber);
 
     // Define allowed status transitions for each role
     const allowedTransitions = {
@@ -181,17 +191,31 @@ const updateOrderStatus = async (req, res) => {
         cancelled: []
       },
       cook: {
-        preparing: ['ready'],
-        ready: ['preparing']
+        confirmed: ['preparing'],
+        preparing: ['ready']
       },
       delivery: {
-        ready: ['delivered'],
-        delivered: ['ready']
+        ready: ['delivered']
       }
     };
 
-    // Check if transition is allowed
-    if (!allowedTransitions[userRole]?.[currentStatus]?.includes(status)) {
+    // Check if user role has permission
+    if (!allowedTransitions[userRole]) {
+      console.log(`❌ Invalid user role: ${userRole}`);
+      return res.status(403).json({ 
+        message: `Invalid user role: ${userRole}. Only admin, cashier, cook, or delivery can update order status.` 
+      });
+    }
+
+    if (!allowedTransitions[userRole][currentStatus]) {
+      console.log(`❌ No transition defined for status ${currentStatus} for role ${userRole}`);
+      return res.status(403).json({ 
+        message: `You cannot update order status from ${currentStatus} with role ${userRole}` 
+      });
+    }
+
+    if (!allowedTransitions[userRole][currentStatus].includes(status)) {
+      console.log(`❌ Transition not allowed: ${currentStatus} -> ${status} for role ${userRole}`);
       return res.status(403).json({ 
         message: `You don't have permission to change order status from ${currentStatus} to ${status}` 
       });
@@ -202,11 +226,12 @@ const updateOrderStatus = async (req, res) => {
     order.status = status;
     
     // Add to status history
+    if (!order.statusHistory) order.statusHistory = [];
     order.statusHistory.push({
       status,
       changedBy: req.user._id,
       changedAt: new Date(),
-      notes: notes || `Status changed from ${oldStatus} to ${status}`
+      notes: notes || `Status changed from ${oldStatus} to ${status} by ${userRole}`
     });
 
     // If order is cancelled, update payment status
@@ -215,6 +240,7 @@ const updateOrderStatus = async (req, res) => {
     }
 
     await order.save();
+    console.log(`✅ Order ${order.orderNumber} status updated: ${oldStatus} -> ${status}`);
 
     // Populate for response
     await order.populate('customer', 'name email');
@@ -231,9 +257,11 @@ const updateOrderStatus = async (req, res) => {
         oldStatus,
         notes: notes || null,
         updatedAt: new Date(),
-        // Special messages for accepted/rejected
         message: status === 'confirmed' ? 'Your order has been accepted!' :
                 status === 'cancelled' ? 'Your order has been cancelled' :
+                status === 'preparing' ? 'Your order is being prepared!' :
+                status === 'ready' ? 'Your order is ready!' :
+                status === 'delivered' ? 'Your order has been delivered!' :
                 `Your order is now ${status}`
       });
 
@@ -254,10 +282,14 @@ const updateOrderStatus = async (req, res) => {
       order
     });
   } catch (error) {
-    console.error('Update order status error:', error);
-    res.status(500).json({ message: 'Failed to update order status' });
+    console.error('❌ Update order status error:', error);
+    res.status(500).json({ 
+      message: 'Failed to update order status',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
+// ========== END UPDATE ORDER STATUS ==========
 
 // @desc    Get user's orders
 // @route   GET /api/orders/my-orders
@@ -425,7 +457,7 @@ const confirmPayment = async (req, res) => {
   }
 };
 
-// ========== ADD THESE MISSING FUNCTIONS ==========
+// ========== CASH PAYMENT FUNCTIONS ==========
 
 // @desc    Process cash payment (for cash on delivery)
 // @route   POST /api/orders/:id/cash-payment
