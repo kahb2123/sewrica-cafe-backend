@@ -10,7 +10,7 @@ const giveawaySchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  imageUrl: {
+  image: {
     type: String,
     default: ''
   },
