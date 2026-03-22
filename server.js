@@ -201,7 +201,7 @@ const paymentRoutes = require('./src/routes/paymentRoutes');
 const staffRoutes = require('./src/routes/staffRoutes');
 const setupRoutes = require('./src/routes/setup');
 const lotteryRoutes = require('./src/routes/lotteryRoutes');
-
+const giveawayRoutes = require('./src/routes/giveawayRoutes');
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/menu', menuRoutes);
@@ -211,6 +211,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/staff', staffRoutes);
 app.use('/api/setup', setupRoutes);
 app.use('/api/lottery', lotteryRoutes);
+app.use('/api/giveaway', giveawayRoutes);
 
 // ========== API ROUTES ==========
 

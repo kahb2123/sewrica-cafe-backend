@@ -2,19 +2,20 @@
 const crypto = require('crypto');
 
 class LotteryService {
-  // Generate a unique lottery ticket number
+  // Generate a unique 5-digit lottery ticket number
   static generateTicketNumber(orderNumber, customerId) {
-    const timestamp = Date.now().toString().slice(-8);
-    const random = crypto.randomBytes(4).toString('hex').toUpperCase();
-    const customerHash = customerId.toString().slice(-6);
-    const orderHash = orderNumber.toString().slice(-6);
-    return `LOT-${timestamp}-${customerHash}-${orderHash}-${random}`;
+    // Create a simple 5-digit number based on timestamp and order
+    const timestamp = Date.now().toString().slice(-3);
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    // Generate a 5-digit number: 2 digits from timestamp + 3 random digits
+    const ticketNumber = `${timestamp}${random}`.slice(-5);
+    
+    // Store as simple number but ensure uniqueness
+    return ticketNumber;
   }
 
   // Check if order is eligible for lottery
   static isEligible(order) {
-    // Only completed orders with valid payment are eligible
-    // Minimum order amount of 100 ETB to prevent spam
     return order.status === 'delivered' && 
            order.paymentStatus === 'completed' &&
            order.totalAmount >= 100;
@@ -22,7 +23,6 @@ class LotteryService {
 
   // Monthly lottery winner selection
   static async selectMonthlyWinners(orders, prizeCount = 3) {
-    // Filter eligible orders from the current month
     const eligibleOrders = orders.filter(order => 
       this.isEligible(order) && 
       !order.lotteryWon
@@ -30,17 +30,13 @@ class LotteryService {
     
     if (eligibleOrders.length === 0) return [];
     
-    // Randomly select winners using Fisher-Yates shuffle
     const shuffled = [...eligibleOrders];
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
     
-    // Take first prizeCount winners
-    const winners = shuffled.slice(0, Math.min(prizeCount, shuffled.length));
-    
-    return winners;
+    return shuffled.slice(0, Math.min(prizeCount, shuffled.length));
   }
 
   // Generate winner certificate
@@ -75,27 +71,6 @@ class LotteryService {
 ║                                                                      ║
 ╚══════════════════════════════════════════════════════════════════════╝
     `;
-  }
-
-  // Validate lottery ticket number format
-  static validateTicketNumber(ticketNumber) {
-    const pattern = /^LOT-\d{8}-[A-F0-9]{6}-[A-F0-9]{6}-[A-F0-9]{8}$/;
-    return pattern.test(ticketNumber);
-  }
-
-  // Parse ticket number to get order and customer info
-  static parseTicketNumber(ticketNumber) {
-    if (!this.validateTicketNumber(ticketNumber)) {
-      return null;
-    }
-    
-    const parts = ticketNumber.split('-');
-    return {
-      timestamp: parts[1],
-      customerHash: parts[2],
-      orderHash: parts[3],
-      random: parts[4]
-    };
   }
 }
 
