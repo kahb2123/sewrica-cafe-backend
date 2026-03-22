@@ -186,7 +186,7 @@ const updateOrderStatus = async (req, res) => {
       admin: {
         pending: ['confirmed', 'cancelled'],
         confirmed: ['preparing', 'cancelled'],
-        preparing: ['cooking', 'cancelled'],
+        preparing: ['cooking', 'ready', 'cancelled'],  // ← FIXED: Added 'ready'
         cooking: ['ready', 'cancelled'],
         ready: ['out-for-delivery', 'delivered', 'cancelled'],
         'out-for-delivery': ['delivered', 'cancelled'],
@@ -196,7 +196,7 @@ const updateOrderStatus = async (req, res) => {
       cashier: {
         pending: ['confirmed', 'cancelled'],
         confirmed: ['preparing', 'cancelled'],
-        preparing: ['cooking', 'cancelled'],
+        preparing: ['cooking', 'ready', 'cancelled'],  // ← FIXED: Added 'ready'
         cooking: ['ready', 'cancelled'],
         ready: ['out-for-delivery', 'delivered', 'cancelled'],
         'out-for-delivery': ['delivered', 'cancelled'],
@@ -231,8 +231,13 @@ const updateOrderStatus = async (req, res) => {
 
     if (!allowedTransitions[userRole][currentStatus].includes(status)) {
       console.log(`❌ Transition not allowed: ${currentStatus} -> ${status} for role ${userRole}`);
+      console.log(`   Allowed transitions: ${allowedTransitions[userRole][currentStatus].join(', ')}`);
       return res.status(403).json({ 
-        message: `You don't have permission to change order status from ${currentStatus} to ${status}` 
+        message: `You don't have permission to change order status from ${currentStatus} to ${status}`,
+        allowed: allowedTransitions[userRole][currentStatus],
+        currentStatus: currentStatus,
+        requestedStatus: status,
+        userRole: userRole
       });
     }
 
@@ -249,6 +254,28 @@ const updateOrderStatus = async (req, res) => {
       notes: notes || `Status changed from ${oldStatus} to ${status} by ${userRole}`
     });
 
+    // Track cooking time
+    if (status === 'cooking' && !order.cookingStartedAt) {
+      order.cookingStartedAt = new Date();
+    }
+    
+    if (status === 'ready' && order.cookingStartedAt && !order.cookingCompletedAt) {
+      order.cookingCompletedAt = new Date();
+      const diffMs = order.cookingCompletedAt - order.cookingStartedAt;
+      order.cookingTime = Math.round(diffMs / 60000);
+    }
+
+    // Track delivery time
+    if (status === 'out-for-delivery' && !order.deliveryStartedAt) {
+      order.deliveryStartedAt = new Date();
+    }
+    
+    if (status === 'delivered' && order.deliveryStartedAt && !order.deliveryCompletedAt) {
+      order.deliveryCompletedAt = new Date();
+      const diffMs = order.deliveryCompletedAt - order.deliveryStartedAt;
+      order.deliveryTime = Math.round(diffMs / 60000);
+    }
+
     // If order is cancelled, update payment status
     if (status === 'cancelled' && order.paymentStatus === 'processing') {
       order.paymentStatus = 'failed';
@@ -256,11 +283,9 @@ const updateOrderStatus = async (req, res) => {
 
     // Check if order becomes eligible for lottery (when delivered)
     if (status === 'delivered' && oldStatus !== 'delivered') {
-      // Order is now eligible for lottery
       if (order.lotteryEligible && !order.lotteryWon) {
         console.log(`🎫 Order #${order.orderNumber} is now eligible for lottery! Ticket: ${order.lotteryTicketNumber}`);
         
-        // Notify admin about eligible lottery ticket
         const io = req.app.get('io');
         if (io) {
           io.to('staff-admin').emit('lottery-eligible', {
@@ -283,7 +308,16 @@ const updateOrderStatus = async (req, res) => {
     // ========== SOCKET.IO: Notify customer about status change ==========
     const io = req.app.get('io');
     if (io) {
-      // Send to specific order room
+      const statusMessages = {
+        confirmed: 'Your order has been accepted!',
+        cancelled: 'Your order has been cancelled',
+        preparing: 'Your order is being prepared!',
+        cooking: 'Your order is being cooked!',
+        ready: 'Your order is ready!',
+        'out-for-delivery': 'Your order is on the way!',
+        delivered: `Your order has been delivered! Your lottery ticket ${order.lotteryTicketNumber} is now active!`
+      };
+
       io.to(`order-${order._id}`).emit('order-status-updated', {
         orderId: order._id,
         orderNumber: order.orderNumber,
@@ -292,17 +326,9 @@ const updateOrderStatus = async (req, res) => {
         notes: notes || null,
         updatedAt: new Date(),
         lotteryTicketNumber: order.lotteryTicketNumber,
-        message: status === 'confirmed' ? 'Your order has been accepted!' :
-                status === 'cancelled' ? 'Your order has been cancelled' :
-                status === 'preparing' ? 'Your order is being prepared!' :
-                status === 'cooking' ? 'Your order is being cooked!' :
-                status === 'ready' ? 'Your order is ready!' :
-                status === 'out-for-delivery' ? 'Your order is on the way!' :
-                status === 'delivered' ? `Your order has been delivered! Your lottery ticket ${order.lotteryTicketNumber} is now active!` :
-                `Your order is now ${status}`
+        message: statusMessages[status] || `Your order is now ${status}`
       });
 
-      // Also notify staff rooms about the update
       io.to('staff-admin').to('staff-cashier').emit('order-updated', {
         orderId: order._id,
         orderNumber: order.orderNumber,
