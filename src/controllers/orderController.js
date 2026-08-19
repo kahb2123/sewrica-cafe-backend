@@ -37,16 +37,31 @@ const createOrder = async (req, res) => {
     // Validate and calculate order items
     let subtotal = 0;
     const orderItems = [];
+    const requestedQuantities = new Map();
 
     for (const item of items) {
-      const menuItem = await MenuItem.findById(item.menuItem);
-      if (!menuItem) {
-        return res.status(400).json({ message: `Menu item ${item.menuItem} not found` });
+      const quantity = Number(item.quantity);
+      if (!Number.isInteger(quantity) || quantity < 1) {
+        return res.status(400).json({ message: 'Each item quantity must be a whole number greater than 0' });
       }
+      const itemId = String(item.menuItem);
+      requestedQuantities.set(itemId, (requestedQuantities.get(itemId) || 0) + quantity);
+    }
 
-      if (!menuItem.isAvailable) {
-        return res.status(400).json({ message: `${menuItem.name} is currently unavailable` });
+    const menuItems = new Map();
+    for (const [itemId, quantity] of requestedQuantities) {
+      const menuItem = await MenuItem.findById(itemId);
+      if (!menuItem) {
+        return res.status(400).json({ message: `Menu item ${itemId} not found` });
       }
+      if (!menuItem.isAvailable || menuItem.stockQuantity < quantity) {
+        return res.status(400).json({ message: `${menuItem.name} does not have enough stock` });
+      }
+      menuItems.set(itemId, menuItem);
+    }
+
+    for (const item of items) {
+      const menuItem = menuItems.get(String(item.menuItem));
 
       const itemTotal = menuItem.price * item.quantity;
       subtotal += itemTotal;
@@ -54,9 +69,20 @@ const createOrder = async (req, res) => {
       orderItems.push({
         menuItem: menuItem._id,
         name: menuItem.name,
-        quantity: item.quantity,
+        quantity: Number(item.quantity),
         price: menuItem.price
       });
+    }
+
+    for (const [itemId, quantity] of requestedQuantities) {
+      const updatedItem = await MenuItem.findOneAndUpdate(
+        { _id: itemId, stockQuantity: { $gte: quantity }, isAvailable: true },
+        { $inc: { stockQuantity: -quantity } },
+        { new: true }
+      );
+      if (!updatedItem) {
+        return res.status(409).json({ message: 'Stock changed while placing the order. Please try again.' });
+      }
     }
 
     const totalAmount = subtotal;
@@ -77,7 +103,9 @@ const createOrder = async (req, res) => {
     const lotteryTicketNumber = LotteryService.generateTicketNumber(orderNumber, user._id);
 
     // Create order with initial status
-    const order = await Order.create({
+    let order;
+    try {
+      order = await Order.create({
       orderNumber,
       customer: user._id,
       customerName: customerInfo.name,
@@ -105,7 +133,13 @@ const createOrder = async (req, res) => {
         changedAt: new Date(),
         notes: `Order placed - Lottery Ticket: ${lotteryTicketNumber}`
       }]
-    });
+      });
+    } catch (error) {
+      for (const [itemId, quantity] of requestedQuantities) {
+        await MenuItem.findByIdAndUpdate(itemId, { $inc: { stockQuantity: quantity } });
+      }
+      throw error;
+    }
 
     await order.populate('items.menuItem');
 

@@ -10,6 +10,8 @@ const {
   updateMenuItem,
   deleteMenuItem,
   toggleAvailability,
+  getInventory,
+  updateInventory,
   getAllCategories
 } = require('../controllers/menuController');
 
@@ -27,6 +29,9 @@ router.get('/category/:category', getMenuItemsByCategory);
 router.get('/:id', getMenuItemById);
 
 // Admin only routes (require authentication and admin role)
+// GET /api/menu/inventory - Get all menu items with stock levels
+router.get('/inventory', protect, authorize('admin'), getInventory);
+
 // POST /api/menu - Create new menu item with enhanced error handling
 router.post(
   '/',
@@ -59,6 +64,14 @@ router.patch(
   protect,
   authorize('admin'),
   toggleAvailability
+);
+
+// PATCH /api/menu/:id/inventory - Update stock levels
+router.patch(
+  '/:id/inventory',
+  protect,
+  authorize('admin'),
+  updateInventory
 );
 
 module.exports = router;

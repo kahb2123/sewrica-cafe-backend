@@ -64,6 +64,16 @@ const menuItemSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  stockQuantity: {
+    type: Number,
+    min: 0,
+    default: 100
+  },
+  reorderLevel: {
+    type: Number,
+    min: 0,
+    default: 10
+  },
   ingredients: [String]
 });
 

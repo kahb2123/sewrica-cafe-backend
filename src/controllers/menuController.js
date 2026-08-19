@@ -360,6 +360,48 @@ const getAllCategories = async (req, res) => {
   }
 };
 
+// @desc    Get inventory for all menu items
+// @route   GET /api/menu/inventory
+// @access  Private/Admin
+const getInventory = async (req, res) => {
+  try {
+    const inventory = await MenuItem.find({}).sort({ stockQuantity: 1, name: 1 });
+    res.json({ success: true, count: inventory.length, data: inventory });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Update inventory quantity and reorder level
+// @route   PATCH /api/menu/:id/inventory
+// @access  Private/Admin
+const updateInventory = async (req, res) => {
+  try {
+    const stockQuantity = Number(req.body.stockQuantity);
+    const reorderLevel = Number(req.body.reorderLevel);
+
+    if (!Number.isInteger(stockQuantity) || stockQuantity < 0) {
+      return res.status(400).json({ success: false, message: 'Stock quantity must be a whole number of 0 or more' });
+    }
+    if (!Number.isInteger(reorderLevel) || reorderLevel < 0) {
+      return res.status(400).json({ success: false, message: 'Reorder level must be a whole number of 0 or more' });
+    }
+
+    const menuItem = await MenuItem.findByIdAndUpdate(
+      req.params.id,
+      { stockQuantity, reorderLevel, isAvailable: stockQuantity > 0 },
+      { new: true, runValidators: true }
+    );
+
+    if (!menuItem) {
+      return res.status(404).json({ success: false, message: 'Menu item not found' });
+    }
+    res.json({ success: true, data: menuItem });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   getAllMenuItems,
   getMenuItemById,
@@ -368,5 +410,7 @@ module.exports = {
   updateMenuItem,
   deleteMenuItem,
   toggleAvailability,
+  getInventory,
+  updateInventory,
   getAllCategories
 };
