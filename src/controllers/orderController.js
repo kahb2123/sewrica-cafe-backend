@@ -173,17 +173,17 @@ const updateOrderStatus = async (req, res) => {
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
-    if (currentStatus === status) {
-  console.log(`⚠️ Cannot change to same status: ${status}`);
-  return res.status(400).json({ 
-    message: `Order is already in ${status} status`,
-    currentStatus: status
-  });
-}
 
     // Check permissions based on user role
     const userRole = req.user.role;
     const currentStatus = order.status;
+
+    if (currentStatus === status) {
+      return res.status(400).json({
+        message: `Order is already in ${status} status`,
+        currentStatus: status
+      });
+    }
 
     console.log('   Current Status:', currentStatus);
     console.log('   Order Number:', order.orderNumber);

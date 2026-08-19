@@ -293,6 +293,10 @@ router.post('/orders/:orderId/delivery-accept', async (req, res) => {
       return res.status(403).json({ success: false, message: 'This order is not assigned to you' });
     }
 
+    if (order.status !== 'ready') {
+      return res.status(400).json({ success: false, message: 'Order must be ready before accepting delivery' });
+    }
+
     if (order.deliveryAccepted) {
       return res.status(400).json({ success: false, message: 'Delivery already accepted' });
     }
@@ -300,10 +304,9 @@ router.post('/orders/:orderId/delivery-accept', async (req, res) => {
     order.deliveryAccepted = true;
     order.deliveryAcceptedAt = new Date();
     if (notes) order.deliveryNotes = notes;
-    order.status = 'out-for-delivery';
     
     if (order.addStatusHistory) {
-      order.addStatusHistory('out-for-delivery', req.user._id, `Delivery accepted: ${notes || 'No notes'}`);
+      order.addStatusHistory('ready', req.user._id, `Delivery accepted: ${notes || 'No notes'}`);
     }
 
     await order.save();
@@ -320,8 +323,8 @@ router.post('/orders/:orderId/delivery-accept', async (req, res) => {
       io.to(`order-${order._id}`).emit('order-status-updated', {
         orderId: order._id,
         orderNumber: order.orderNumber,
-        status: 'out-for-delivery',
-        message: `Your order is out for delivery with ${req.user.name}!`,
+        status: 'ready',
+        message: `${req.user.name} accepted your delivery and will be on the way soon!`,
         updatedAt: new Date()
       });
       
@@ -450,6 +453,9 @@ router.post('/start-cooking/:orderId', async (req, res) => {
 });
 
 // Chef completes cooking (marks as ready)
+// In staffRoutes.js - Update complete-cooking endpoint
+
+// Chef completes cooking (marks as ready)
 router.post('/complete-cooking/:orderId', async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -463,15 +469,22 @@ router.post('/complete-cooking/:orderId', async (req, res) => {
       return res.status(403).json({ success: false, message: 'This order is not assigned to you' });
     }
 
-    if (order.status !== 'cooking') {
-      return res.status(400).json({ success: false, message: 'Order must be cooking to complete' });
+    // Allow from 'preparing' or 'cooking' status
+    if (order.status !== 'preparing' && order.status !== 'cooking') {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Order must be preparing or cooking to mark ready. Current status: ${order.status}` 
+      });
     }
 
+    // Set cooking completed time
     order.cookingCompletedAt = new Date();
     if (order.cookingStartedAt) {
       const diffMs = order.cookingCompletedAt - order.cookingStartedAt;
       order.cookingTime = Math.round(diffMs / 60000);
     }
+    
+    // CRITICAL: Set status to 'ready'
     order.status = 'ready';
     
     if (order.addStatusHistory) {
@@ -480,6 +493,7 @@ router.post('/complete-cooking/:orderId', async (req, res) => {
 
     await order.save();
 
+    // Socket notifications
     const io = req.app.get('io');
     if (io) {
       io.to('staff-admin').to('staff-delivery').emit('order-ready', {
@@ -500,10 +514,17 @@ router.post('/complete-cooking/:orderId', async (req, res) => {
       console.log(`📢 Order ready notification sent for order #${order.orderNumber}`);
     }
 
-    res.json({ success: true, message: 'Order marked as ready', order });
+    res.json({ 
+      success: true, 
+      message: 'Order marked as ready', 
+      order 
+    });
   } catch (error) {
     console.error('Complete cooking error:', error);
-    res.status(500).json({ success: false, message: 'Failed to complete cooking' });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to complete cooking' 
+    });
   }
 });
 
