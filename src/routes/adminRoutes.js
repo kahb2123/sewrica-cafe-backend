@@ -7,6 +7,13 @@ const User = require('../models/User');
 const { protect, adminOnly } = require('../middleware/authMiddleware');
 const bcrypt = require('bcryptjs');
 
+const salesFilter = {
+  $or: [
+    { status: 'delivered' },
+    { paymentStatus: 'completed' }
+  ]
+};
+
 // Protect all admin routes - only admins can access
 router.use(protect);
 router.use(adminOnly);
@@ -465,7 +472,7 @@ router.get('/reports/daily', async (req, res) => {
     
     const orders = await Order.find({
       createdAt: { $gte: reportDate, $lt: nextDay },
-      status: 'delivered'
+      ...salesFilter
     }).populate('items.menuItem');
     
     const totalOrders = orders.length;
@@ -475,7 +482,7 @@ router.get('/reports/daily', async (req, res) => {
     const categoryBreakdown = {};
     orders.forEach(order => {
       order.items.forEach(item => {
-        const category = item.category || 'other';
+        const category = item.menuItem?.category || item.category || 'other';
         if (!categoryBreakdown[category]) {
           categoryBreakdown[category] = { itemsSold: 0, revenue: 0 };
         }
@@ -546,7 +553,7 @@ router.get('/reports/weekly', async (req, res) => {
     
     const orders = await Order.find({
       createdAt: { $gte: startOfWeek, $lt: endOfWeek },
-      status: 'delivered'
+      ...salesFilter
     }).populate('items.menuItem');
     
     const totalOrders = orders.length;
@@ -577,7 +584,7 @@ router.get('/reports/monthly', async (req, res) => {
     
     const orders = await Order.find({
       createdAt: { $gte: startOfMonth, $lte: endOfMonth },
-      status: 'delivered'
+      ...salesFilter
     }).populate('items.menuItem');
     
     const totalOrders = orders.length;
@@ -592,6 +599,44 @@ router.get('/reports/monthly', async (req, res) => {
     });
   } catch (error) {
     console.error('Monthly report error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @desc    Get a report for a custom date range
+// @route   GET /api/admin/reports/custom
+router.get('/reports/custom', async (req, res) => {
+  try {
+    const { start, end } = req.query;
+    if (!start || !end) {
+      return res.status(400).json({ message: 'Start and end dates are required' });
+    }
+
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      return res.status(400).json({ message: 'Invalid date range' });
+    }
+    startDate.setHours(0, 0, 0, 0);
+    endDate.setHours(23, 59, 59, 999);
+
+    const orders = await Order.find({
+      createdAt: { $gte: startDate, $lte: endDate },
+      ...salesFilter
+    });
+    const totalOrders = orders.length;
+    const totalRevenue = orders.reduce((sum, order) => sum + order.totalAmount, 0);
+
+    res.json({
+      totalOrders,
+      totalRevenue,
+      averageOrderValue: totalOrders ? totalRevenue / totalOrders : 0,
+      categoryBreakdown: [],
+      deliveryBreakdown: [],
+      topItems: []
+    });
+  } catch (error) {
+    console.error('Custom report error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });

@@ -25,12 +25,12 @@ router.get('/categories', getAllCategories);
 // GET /api/menu/category/:category - Get items by specific category
 router.get('/category/:category', getMenuItemsByCategory);
 
-// GET /api/menu/:id - Get single menu item by ID
-router.get('/:id', getMenuItemById);
-
 // Admin only routes (require authentication and admin role)
 // GET /api/menu/inventory - Get all menu items with stock levels
 router.get('/inventory', protect, authorize('admin'), getInventory);
+
+// GET /api/menu/:id - Get single menu item by ID
+router.get('/:id', getMenuItemById);
 
 // POST /api/menu - Create new menu item with enhanced error handling
 router.post(
