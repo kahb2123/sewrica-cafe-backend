@@ -8,10 +8,7 @@ const { protect, adminOnly } = require('../middleware/authMiddleware');
 const bcrypt = require('bcryptjs');
 
 const salesFilter = {
-  $or: [
-    { status: 'delivered' },
-    { paymentStatus: 'completed' }
-  ]
+  status: { $ne: 'cancelled' }
 };
 
 const buildSalesReport = async (startDate, endDate) => {
@@ -518,70 +515,7 @@ router.get('/reports/daily', async (req, res) => {
     const nextDay = new Date(reportDate);
     nextDay.setDate(nextDay.getDate() + 1);
     
-    const orders = await Order.find({
-      createdAt: { $gte: reportDate, $lt: nextDay },
-      ...salesFilter
-    }).populate('items.menuItem');
-    
-    const totalOrders = orders.length;
-    const totalRevenue = orders.reduce((sum, order) => sum + order.totalAmount, 0);
-    const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
-    
-    const categoryBreakdown = {};
-    orders.forEach(order => {
-      order.items.forEach(item => {
-        const category = item.menuItem?.category || item.category || 'other';
-        if (!categoryBreakdown[category]) {
-          categoryBreakdown[category] = { itemsSold: 0, revenue: 0 };
-        }
-        categoryBreakdown[category].itemsSold += item.quantity;
-        categoryBreakdown[category].revenue += item.price * item.quantity;
-      });
-    });
-    
-    const deliveryBreakdown = {};
-    orders.forEach(order => {
-      if (order.assignedDelivery) {
-        const deliveryName = order.assignedDelivery.name || order.assignedDelivery;
-        if (!deliveryBreakdown[deliveryName]) {
-          deliveryBreakdown[deliveryName] = { ordersCount: 0, totalAmount: 0 };
-        }
-        deliveryBreakdown[deliveryName].ordersCount += 1;
-        deliveryBreakdown[deliveryName].totalAmount += order.totalAmount;
-      }
-    });
-    
-    const itemSales = {};
-    orders.forEach(order => {
-      order.items.forEach(item => {
-        const itemName = item.name;
-        if (!itemSales[itemName]) {
-          itemSales[itemName] = { quantity: 0, revenue: 0 };
-        }
-        itemSales[itemName].quantity += item.quantity;
-        itemSales[itemName].revenue += item.price * item.quantity;
-      });
-    });
-    
-    const topItems = Object.entries(itemSales)
-      .map(([name, data]) => ({ name, ...data }))
-      .sort((a, b) => b.quantity - a.quantity)
-      .slice(0, 10);
-    
-    res.json({
-      totalOrders,
-      totalRevenue,
-      averageOrderValue,
-      categoryBreakdown: Object.entries(categoryBreakdown).map(([category, data]) => ({
-        category,
-        ...data
-      })),
-      deliveryBreakdown: Object.entries(deliveryBreakdown).map(([name, data]) => ({
-        name,
-        ...data
-      })),
-      topItems
-    });
+    res.json(await buildSalesReport(reportDate, nextDay));
   } catch (error) {
     console.error('Daily report error:', error);
     res.status(500).json({ message: 'Server error' });
