@@ -7,7 +7,7 @@ const path = require('path');
 // @access  Public
 const getAllMenuItems = async (req, res) => {
   try {
-    const { category, vegetarian, spicy, signature, minPrice, maxPrice } = req.query;
+    const { category, vegetarian, spicy, signature, minPrice, maxPrice, includeUnavailable } = req.query;
     
     // Build filter object
     let filter = {};
@@ -34,8 +34,9 @@ const getAllMenuItems = async (req, res) => {
       if (maxPrice) filter.price.$lte = Number(maxPrice);
     }
     
-    // Only show available items
-    filter.isAvailable = true;
+    if (includeUnavailable !== 'true') {
+      filter.isAvailable = true;
+    }
     
     const menuItems = await MenuItem.find(filter).sort({ category: 1, name: 1 });
     
