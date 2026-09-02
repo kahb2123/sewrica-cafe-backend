@@ -14,6 +14,54 @@ const salesFilter = {
   ]
 };
 
+const buildSalesReport = async (startDate, endDate) => {
+  const orders = await Order.find({
+    createdAt: { $gte: startDate, $lt: endDate },
+    ...salesFilter
+  })
+    .populate('items.menuItem')
+    .populate('assignedDelivery', 'name');
+
+  const totalOrders = orders.length;
+  const totalRevenue = orders.reduce((sum, order) => sum + (Number(order.totalAmount) || 0), 0);
+  const categoryBreakdown = {};
+  const deliveryBreakdown = {};
+  const itemSales = {};
+
+  orders.forEach(order => {
+    order.items.forEach(item => {
+      const category = item.menuItem?.category || item.category || 'other';
+      categoryBreakdown[category] ||= { itemsSold: 0, revenue: 0 };
+      categoryBreakdown[category].itemsSold += item.quantity;
+      categoryBreakdown[category].revenue += item.price * item.quantity;
+
+      const itemName = item.name || item.menuItem?.name || 'Unknown item';
+      itemSales[itemName] ||= { quantity: 0, revenue: 0 };
+      itemSales[itemName].quantity += item.quantity;
+      itemSales[itemName].revenue += item.price * item.quantity;
+    });
+
+    if (order.assignedDelivery) {
+      const deliveryName = order.assignedDelivery.name || String(order.assignedDelivery);
+      deliveryBreakdown[deliveryName] ||= { ordersCount: 0, totalAmount: 0 };
+      deliveryBreakdown[deliveryName].ordersCount += 1;
+      deliveryBreakdown[deliveryName].totalAmount += Number(order.totalAmount) || 0;
+    }
+  });
+
+  return {
+    totalOrders,
+    totalRevenue,
+    averageOrderValue: totalOrders ? totalRevenue / totalOrders : 0,
+    categoryBreakdown: Object.entries(categoryBreakdown).map(([category, data]) => ({ category, ...data })),
+    deliveryBreakdown: Object.entries(deliveryBreakdown).map(([name, data]) => ({ name, ...data })),
+    topItems: Object.entries(itemSales)
+      .map(([name, data]) => ({ name, ...data }))
+      .sort((a, b) => b.quantity - a.quantity)
+      .slice(0, 10)
+  };
+};
+
 // Protect all admin routes - only admins can access
 router.use(protect);
 router.use(adminOnly);
@@ -551,19 +599,8 @@ router.get('/reports/weekly', async (req, res) => {
     const endOfWeek = new Date(startOfWeek);
     endOfWeek.setDate(endOfWeek.getDate() + 7);
     
-    const orders = await Order.find({
-      createdAt: { $gte: startOfWeek, $lt: endOfWeek },
-      ...salesFilter
-    }).populate('items.menuItem');
-    
-    const totalOrders = orders.length;
-    const totalRevenue = orders.reduce((sum, order) => sum + order.totalAmount, 0);
-    const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
-    
     res.json({
-      totalOrders,
-      totalRevenue,
-      averageOrderValue,
+      ...(await buildSalesReport(startOfWeek, endOfWeek)),
       period: 'weekly'
     });
   } catch (error) {
@@ -579,22 +616,9 @@ router.get('/reports/monthly', async (req, res) => {
     const { month } = req.query;
     const now = new Date();
     const startOfMonth = month ? new Date(month) : new Date(now.getFullYear(), now.getMonth(), 1);
-    const endOfMonth = new Date(startOfMonth.getFullYear(), startOfMonth.getMonth() + 1, 0);
-    endOfMonth.setHours(23, 59, 59, 999);
-    
-    const orders = await Order.find({
-      createdAt: { $gte: startOfMonth, $lte: endOfMonth },
-      ...salesFilter
-    }).populate('items.menuItem');
-    
-    const totalOrders = orders.length;
-    const totalRevenue = orders.reduce((sum, order) => sum + order.totalAmount, 0);
-    const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
-    
+    const endExclusive = new Date(startOfMonth.getFullYear(), startOfMonth.getMonth() + 1, 1);
     res.json({
-      totalOrders,
-      totalRevenue,
-      averageOrderValue,
+      ...(await buildSalesReport(startOfMonth, endExclusive)),
       period: 'monthly'
     });
   } catch (error) {
@@ -618,23 +642,13 @@ router.get('/reports/custom', async (req, res) => {
       return res.status(400).json({ message: 'Invalid date range' });
     }
     startDate.setHours(0, 0, 0, 0);
-    endDate.setHours(23, 59, 59, 999);
+    endDate.setHours(0, 0, 0, 0);
+    if (startDate > endDate) {
+      return res.status(400).json({ message: 'Start date must be before or equal to end date' });
+    }
 
-    const orders = await Order.find({
-      createdAt: { $gte: startDate, $lte: endDate },
-      ...salesFilter
-    });
-    const totalOrders = orders.length;
-    const totalRevenue = orders.reduce((sum, order) => sum + order.totalAmount, 0);
-
-    res.json({
-      totalOrders,
-      totalRevenue,
-      averageOrderValue: totalOrders ? totalRevenue / totalOrders : 0,
-      categoryBreakdown: [],
-      deliveryBreakdown: [],
-      topItems: []
-    });
+    endDate.setDate(endDate.getDate() + 1);
+    res.json(await buildSalesReport(startDate, endDate));
   } catch (error) {
     console.error('Custom report error:', error);
     res.status(500).json({ message: 'Server error' });
