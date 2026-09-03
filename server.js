@@ -214,6 +214,7 @@ app.use('/api/setup', setupRoutes);
 app.use('/api/lottery', lotteryRoutes);
 app.use('/api/giveaway', giveawayRoutes);
 app.use('/api/ingredients', ingredientRoutes);
+console.log('✅ Ingredient inventory routes enabled at /api/ingredients');
 
 // ========== API ROUTES ==========
 
