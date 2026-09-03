@@ -4,6 +4,7 @@ const router = express.Router();
 const MenuItem = require('../models/MenuItem');
 const Order = require('../models/Order');
 const User = require('../models/User');
+const PDFDocument = require('pdfkit');
 const { protect, adminOnly } = require('../middleware/authMiddleware');
 const bcrypt = require('bcryptjs');
 
@@ -59,6 +60,50 @@ const buildSalesReport = async (startDate, endDate) => {
   };
 };
 
+const csvCell = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+
+const getReportPeriod = (type, start, end) => {
+  if (type === 'custom') {
+    if (!start || !end) throw new Error('Start and end dates are required');
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) throw new Error('Invalid date range');
+    startDate.setHours(0, 0, 0, 0);
+    endDate.setHours(0, 0, 0, 0);
+    if (startDate > endDate) throw new Error('Start date must be before or equal to end date');
+    endDate.setDate(endDate.getDate() + 1);
+    return [startDate, endDate];
+  }
+
+  if (type === 'daily') {
+    const date = new Date(start || new Date());
+    if (Number.isNaN(date.getTime())) throw new Error('Invalid date');
+    date.setHours(0, 0, 0, 0);
+    const nextDay = new Date(date);
+    nextDay.setDate(nextDay.getDate() + 1);
+    return [date, nextDay];
+  }
+
+  if (type === 'weekly') {
+    const date = new Date(start || new Date());
+    if (Number.isNaN(date.getTime())) throw new Error('Invalid week date');
+    date.setHours(0, 0, 0, 0);
+    const weekStart = start ? date : new Date(date.setDate(date.getDate() - date.getDay()));
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 7);
+    return [weekStart, weekEnd];
+  }
+
+  if (type === 'monthly') {
+    const date = new Date(start || new Date());
+    if (Number.isNaN(date.getTime())) throw new Error('Invalid month date');
+    const monthStart = new Date(date.getFullYear(), date.getMonth(), 1);
+    return [monthStart, new Date(date.getFullYear(), date.getMonth() + 1, 1)];
+  }
+
+  throw new Error('Unsupported report type');
+};
+
 // Protect all admin routes - only admins can access
 router.use(protect);
 router.use(adminOnly);
@@ -78,7 +123,7 @@ router.post('/staff', async (req, res) => {
       });
     }
 
-    const validRoles = ['cook', 'delivery', 'cashier', 'admin'];
+    const validRoles = ['cook', 'delivery', 'cashier', 'supply_chain', 'admin'];
     if (!validRoles.includes(role)) {
       return res.status(400).json({ 
         success: false,
@@ -130,10 +175,10 @@ router.get('/staff', async (req, res) => {
     const { role } = req.query;
     let query = {};
     
-    if (role && ['cook', 'delivery', 'cashier', 'admin'].includes(role)) {
+    if (role && ['cook', 'delivery', 'cashier', 'supply_chain', 'admin'].includes(role)) {
       query.role = role;
     } else if (!role) {
-      query.role = { $in: ['cook', 'delivery', 'cashier', 'admin'] };
+      query.role = { $in: ['cook', 'delivery', 'cashier', 'supply_chain', 'admin'] };
     }
     
     const staff = await User.find(query)
@@ -558,6 +603,71 @@ router.get('/reports/monthly', async (req, res) => {
   } catch (error) {
     console.error('Monthly report error:', error);
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @desc    Export a sales report as CSV or PDF
+// @route   GET /api/admin/reports/export/:type
+router.get('/reports/export/:type', async (req, res) => {
+  try {
+    const { type } = req.params;
+    const format = String(req.query.format || 'csv').toLowerCase();
+    if (!['daily', 'weekly', 'monthly', 'custom'].includes(type)) {
+      return res.status(400).json({ message: 'Unsupported report type' });
+    }
+    if (!['csv', 'pdf'].includes(format)) {
+      return res.status(400).json({ message: 'Format must be csv or pdf' });
+    }
+
+    const [startDate, endDate] = getReportPeriod(type, req.query.start, req.query.end);
+    const report = await buildSalesReport(startDate, endDate);
+    const filename = `report-${type}.${format}`;
+
+    if (format === 'csv') {
+      const rows = [
+        ['Sales Report', type],
+        ['Total Orders', report.totalOrders],
+        ['Total Revenue', report.totalRevenue],
+        ['Average Order Value', report.averageOrderValue],
+        [],
+        ['Top Selling Items'],
+        ['Item', 'Quantity', 'Revenue'],
+        ...report.topItems.map(item => [item.name, item.quantity, item.revenue]),
+        [],
+        ['Sales by Category'],
+        ['Category', 'Items Sold', 'Revenue'],
+        ...report.categoryBreakdown.map(item => [item.category, item.itemsSold, item.revenue]),
+        [],
+        ['Delivery Performance'],
+        ['Delivery Person', 'Orders', 'Amount'],
+        ...report.deliveryBreakdown.map(item => [item.name, item.ordersCount, item.totalAmount])
+      ];
+      const csv = rows.map(row => row.map(csvCell).join(',')).join('\n');
+      res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${filename}"` });
+      return res.send(csv);
+    }
+
+    const document = new PDFDocument({ margin: 48 });
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="${filename}"` });
+    document.pipe(res);
+    document.fontSize(18).text(`Sewrica Cafe ${type} Sales Report`);
+    document.moveDown().fontSize(11).text(`Period: ${startDate.toISOString().slice(0, 10)} to ${new Date(endDate - 1).toISOString().slice(0, 10)}`);
+    document.moveDown().text(`Total orders: ${report.totalOrders}`);
+    document.text(`Total revenue: ${report.totalRevenue.toLocaleString()} ETB`);
+    document.text(`Average order value: ${report.averageOrderValue.toLocaleString()} ETB`);
+    document.moveDown().fontSize(14).text('Top Selling Items');
+    document.fontSize(10);
+    report.topItems.forEach(item => document.text(`${item.name}: ${item.quantity} items, ${item.revenue.toLocaleString()} ETB`));
+    document.moveDown().fontSize(14).text('Sales by Category');
+    document.fontSize(10);
+    report.categoryBreakdown.forEach(item => document.text(`${item.category}: ${item.itemsSold} items, ${item.revenue.toLocaleString()} ETB`));
+    document.moveDown().fontSize(14).text('Delivery Performance');
+    document.fontSize(10);
+    report.deliveryBreakdown.forEach(item => document.text(`${item.name}: ${item.ordersCount} orders, ${item.totalAmount.toLocaleString()} ETB`));
+    return document.end();
+  } catch (error) {
+    console.error('Report export error:', error);
+    return res.status(400).json({ message: error.message || 'Failed to export report' });
   }
 });
 
