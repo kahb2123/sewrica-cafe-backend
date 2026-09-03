@@ -54,7 +54,7 @@ const createOrder = async (req, res) => {
       if (!menuItem) {
         return res.status(400).json({ message: `Menu item ${itemId} not found` });
       }
-      if (!menuItem.isAvailable || menuItem.stockQuantity < quantity) {
+      if (!menuItem.isAvailable) {
         return res.status(400).json({ message: `${menuItem.name} does not have enough stock` });
       }
       menuItems.set(itemId, menuItem);
@@ -72,27 +72,6 @@ const createOrder = async (req, res) => {
         quantity: Number(item.quantity),
         price: menuItem.price
       });
-    }
-
-    const reservedItems = [];
-    for (const [itemId, quantity] of requestedQuantities) {
-      const updatedItem = await MenuItem.findOneAndUpdate(
-        { _id: itemId, stockQuantity: { $gte: quantity }, isAvailable: true },
-        { $inc: { stockQuantity: -quantity } },
-        { new: true }
-      );
-      if (!updatedItem) {
-        for (const reservedItem of reservedItems) {
-          await MenuItem.findByIdAndUpdate(reservedItem.itemId, { $inc: { stockQuantity: reservedItem.quantity } });
-        }
-        const conflictingItem = menuItems.get(itemId);
-        return res.status(409).json({
-          message: `${conflictingItem?.name || 'An item'} stock changed while placing the order. Please refresh your cart and try again.`,
-          code: 'STOCK_CHANGED',
-          item: conflictingItem?.name || itemId
-        });
-      }
-      reservedItems.push({ itemId, quantity });
     }
 
     const totalAmount = subtotal;
@@ -145,9 +124,6 @@ const createOrder = async (req, res) => {
       }]
       });
     } catch (error) {
-      for (const [itemId, quantity] of requestedQuantities) {
-        await MenuItem.findByIdAndUpdate(itemId, { $inc: { stockQuantity: quantity } });
-      }
       throw error;
     }
 
