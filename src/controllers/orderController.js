@@ -74,6 +74,7 @@ const createOrder = async (req, res) => {
       });
     }
 
+    const reservedItems = [];
     for (const [itemId, quantity] of requestedQuantities) {
       const updatedItem = await MenuItem.findOneAndUpdate(
         { _id: itemId, stockQuantity: { $gte: quantity }, isAvailable: true },
@@ -81,8 +82,17 @@ const createOrder = async (req, res) => {
         { new: true }
       );
       if (!updatedItem) {
-        return res.status(409).json({ message: 'Stock changed while placing the order. Please try again.' });
+        for (const reservedItem of reservedItems) {
+          await MenuItem.findByIdAndUpdate(reservedItem.itemId, { $inc: { stockQuantity: reservedItem.quantity } });
+        }
+        const conflictingItem = menuItems.get(itemId);
+        return res.status(409).json({
+          message: `${conflictingItem?.name || 'An item'} stock changed while placing the order. Please refresh your cart and try again.`,
+          code: 'STOCK_CHANGED',
+          item: conflictingItem?.name || itemId
+        });
       }
+      reservedItems.push({ itemId, quantity });
     }
 
     const totalAmount = subtotal;
