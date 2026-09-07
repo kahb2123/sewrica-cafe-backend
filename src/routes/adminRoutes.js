@@ -168,6 +168,34 @@ router.post('/staff', async (req, res) => {
   }
 });
 
+// @desc    Delete staff member
+// @route   DELETE /api/admin/staff/:id
+router.delete('/staff/:id', async (req, res) => {
+  try {
+    const staff = await User.findById(req.params.id);
+
+    if (!staff) {
+      return res.status(404).json({
+        success: false,
+        message: 'Staff member not found'
+      });
+    }
+
+    await staff.deleteOne();
+
+    res.json({
+      success: true,
+      message: 'Staff member deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting staff:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete staff member'
+    });
+  }
+});
+
 // @desc    Get all staff members
 // @route   GET /api/admin/staff
 router.get('/staff', async (req, res) => {
