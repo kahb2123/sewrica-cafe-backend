@@ -32,4 +32,22 @@ const storage = new CloudinaryStorage({
   }
 });
 
-module.exports = { cloudinary, storage };
+const giveawayStorage = new CloudinaryStorage({
+  cloudinary,
+  params: async (req, file) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+
+    return {
+      folder: 'sewrica-cafe/giveaways',
+      allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp'],
+      public_id: `giveaway-${uniqueSuffix}`,
+      transformation: [
+        { width: 1200, height: 800, crop: 'limit' },
+        { quality: 'auto' },
+        { fetch_format: 'auto' }
+      ]
+    };
+  }
+});
+
+module.exports = { cloudinary, storage, giveawayStorage };

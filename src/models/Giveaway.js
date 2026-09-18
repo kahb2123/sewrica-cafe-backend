@@ -14,6 +14,14 @@ const giveawaySchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  imageUrl: {
+    type: String,
+    default: ''
+  },
+  imagePublicId: {
+    type: String,
+    default: ''
+  },
   prize: {
     type: String,
     required: true

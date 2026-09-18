@@ -6,6 +6,7 @@ const Giveaway = require('../models/Giveaway');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { cloudinary, giveawayStorage } = require('../config/cloudinary');
 
 // Ensure uploads directory exists
 const uploadDir = path.join(__dirname, '../../uploads/giveaways');
@@ -13,18 +14,6 @@ if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
   console.log('📁 Created giveaway uploads directory:', uploadDir);
 }
-
-// Configure multer for image upload - More flexible file filter
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadDir);
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname) || '.jpg';
-    cb(null, 'giveaway-' + uniqueSuffix + ext);
-  }
-});
 
 // More permissive file filter
 const fileFilter = (req, file, cb) => {
@@ -62,10 +51,30 @@ const fileFilter = (req, file, cb) => {
 };
 
 const upload = multer({ 
-  storage: storage,
+  storage: giveawayStorage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit (increased)
   fileFilter: fileFilter
 });
+
+const getImageUrl = (req, giveaway) => {
+  if (!giveaway.image && !giveaway.imageUrl) return null;
+  if (giveaway.imageUrl) return giveaway.imageUrl;
+  if (giveaway.image && /^https?:\/\//i.test(giveaway.image)) return giveaway.image;
+
+  return `${req.protocol}://${req.get('host')}/uploads/giveaways/${giveaway.image}`;
+};
+
+const deleteStoredImage = async (giveaway) => {
+  if (giveaway.imagePublicId) {
+    await cloudinary.uploader.destroy(giveaway.imagePublicId, { resource_type: 'image' });
+    return;
+  }
+
+  if (giveaway.image && !/^https?:\/\//i.test(giveaway.image)) {
+    const imagePath = path.join(uploadDir, giveaway.image);
+    if (fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
+  }
+};
 
 // Error handling middleware for multer
 const handleMulterError = (err, req, res, next) => {
@@ -90,9 +99,8 @@ router.get('/active', async (req, res) => {
       endDate: { $gte: new Date() }
     }).sort({ createdAt: -1 });
     
-    if (giveaway && giveaway.image) {
-      const baseUrl = `${req.protocol}://${req.get('host')}`;
-      giveaway._doc.imageUrl = `${baseUrl}/uploads/giveaways/${giveaway.image}`;
+    if (giveaway) {
+      giveaway._doc.imageUrl = getImageUrl(req, giveaway);
     }
     
     res.json({
@@ -114,10 +122,9 @@ router.get('/admin/all', protect, async (req, res) => {
     
     const giveaways = await Giveaway.find().sort({ createdAt: -1 });
     
-    const baseUrl = `${req.protocol}://${req.get('host')}`;
     const giveawaysWithUrls = giveaways.map(g => {
       const gObj = g.toObject();
-      gObj.imageUrl = g.image ? `${baseUrl}/uploads/giveaways/${g.image}` : null;
+      gObj.imageUrl = getImageUrl(req, g);
       return gObj;
     });
     
@@ -159,8 +166,12 @@ router.post('/admin/create', protect, upload.single('image'), handleMulterError,
     }
     
     let image = null;
+    let imageUrl = '';
+    let imagePublicId = '';
     if (req.file) {
       image = req.file.filename;
+      imageUrl = req.file.path || req.file.secure_url || '';
+      imagePublicId = req.file.filename || '';
       console.log('✅ Image uploaded:', image);
     } else {
       console.log('⚠️ No image uploaded');
@@ -170,6 +181,8 @@ router.post('/admin/create', protect, upload.single('image'), handleMulterError,
       title,
       description,
       image,
+      imageUrl,
+      imagePublicId,
       prize,
       startDate: new Date(startDate),
       endDate: new Date(endDate),
@@ -179,9 +192,8 @@ router.post('/admin/create', protect, upload.single('image'), handleMulterError,
     
     console.log('✅ Giveaway created:', giveaway._id);
     
-    const baseUrl = `${req.protocol}://${req.get('host')}`;
     const responseGiveaway = giveaway.toObject();
-    responseGiveaway.imageUrl = image ? `${baseUrl}/uploads/giveaways/${image}` : null;
+    responseGiveaway.imageUrl = getImageUrl(req, giveaway);
     
     res.json({
       success: true,
@@ -225,23 +237,18 @@ router.put('/admin/:id', protect, upload.single('image'), handleMulterError, asy
     
     // Handle image upload
     if (req.file) {
-      if (giveaway.image) {
-        const oldImagePath = path.join(uploadDir, giveaway.image);
-        if (fs.existsSync(oldImagePath)) {
-          fs.unlinkSync(oldImagePath);
-          console.log('🗑️ Deleted old image:', giveaway.image);
-        }
-      }
+      await deleteStoredImage(giveaway);
       giveaway.image = req.file.filename;
+      giveaway.imageUrl = req.file.path || req.file.secure_url || '';
+      giveaway.imagePublicId = req.file.filename || '';
       console.log('✅ New image uploaded:', giveaway.image);
     }
     
     await giveaway.save();
     console.log('✅ Giveaway updated:', giveaway._id);
     
-    const baseUrl = `${req.protocol}://${req.get('host')}`;
     const responseGiveaway = giveaway.toObject();
-    responseGiveaway.imageUrl = giveaway.image ? `${baseUrl}/uploads/giveaways/${giveaway.image}` : null;
+    responseGiveaway.imageUrl = getImageUrl(req, giveaway);
     
     res.json({
       success: true,
@@ -265,13 +272,7 @@ router.delete('/admin/:id', protect, async (req, res) => {
     }
     
     const giveaway = await Giveaway.findById(req.params.id);
-    if (giveaway && giveaway.image) {
-      const imagePath = path.join(uploadDir, giveaway.image);
-      if (fs.existsSync(imagePath)) {
-        fs.unlinkSync(imagePath);
-        console.log('🗑️ Deleted image:', giveaway.image);
-      }
-    }
+    if (giveaway) await deleteStoredImage(giveaway);
     
     await Giveaway.findByIdAndDelete(req.params.id);
     console.log('✅ Giveaway deleted:', req.params.id);
