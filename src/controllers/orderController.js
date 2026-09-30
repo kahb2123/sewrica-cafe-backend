@@ -1,4 +1,5 @@
 // src/controllers/orderController.js
+const crypto = require('crypto');
 const Order = require('../models/Order');
 const User = require('../models/User');
 const MenuItem = require('../models/MenuItem');
@@ -75,7 +76,6 @@ const createOrder = async (req, res) => {
     }
 
     const totalAmount = subtotal;
-    const orderNumber = generateOrderNumber();
 
     let paymentStatus = 'pending';
     if (paymentMethod === 'card') {
@@ -89,42 +89,50 @@ const createOrder = async (req, res) => {
     }
 
     // ========== GENERATE LOTTERY TICKET NUMBER ==========
-    const lotteryTicketNumber = LotteryService.generateTicketNumber(orderNumber, user._id);
+    const lotteryTicketNumber = LotteryService.generateTicketNumber(user._id);
 
-    // Create order with initial status
+    // Create order with initial status, retrying if the 5-digit number is already taken
     let order;
-    try {
-      order = await Order.create({
-      orderNumber,
-      customer: user._id,
-      customerName: customerInfo.name,
-      customerPhone: customerInfo.phone,
-      customerEmail: customerInfo.email || user.email,
-      items: orderItems,
-      subtotal,
-      totalAmount,
-      paymentMethod,
-      paymentStatus,
-      deliveryMethod,
-      deliveryTime: deliveryTime || 'asap',
-      specialRequests: specialInstructions || '',
-      status: 'pending',
-      stripePaymentIntentId: null,
-      amountReceived: null,
-      change: null,
-      paidAt: null,
-      lotteryTicketNumber, // Add lottery ticket
-      lotteryEligible: true,
-      // Initialize status history
-      statusHistory: [{
+    for (let attempt = 0; attempt < ORDER_NUMBER_MAX_ATTEMPTS; attempt++) {
+      try {
+        order = await Order.create({
+        orderNumber: generateOrderNumber(),
+        customer: user._id,
+        customerName: customerInfo.name,
+        customerPhone: customerInfo.phone,
+        customerEmail: customerInfo.email || user.email,
+        items: orderItems,
+        subtotal,
+        totalAmount,
+        paymentMethod,
+        paymentStatus,
+        deliveryMethod,
+        deliveryTime: deliveryTime || 'asap',
+        specialRequests: specialInstructions || '',
         status: 'pending',
-        changedBy: user._id,
-        changedAt: new Date(),
-        notes: `Order placed - Lottery Ticket: ${lotteryTicketNumber}`
-      }]
-      });
-    } catch (error) {
-      throw error;
+        stripePaymentIntentId: null,
+        amountReceived: null,
+        change: null,
+        paidAt: null,
+        lotteryTicketNumber, // Add lottery ticket
+        lotteryEligible: true,
+        // Initialize status history
+        statusHistory: [{
+          status: 'pending',
+          changedBy: user._id,
+          changedAt: new Date(),
+          notes: `Order placed - Lottery Ticket: ${lotteryTicketNumber}`
+        }]
+        });
+        break;
+      } catch (error) {
+        const isDuplicateOrderNumber =
+          error && error.code === 11000 && error.keyPattern && error.keyPattern.orderNumber;
+        if (!isDuplicateOrderNumber || attempt === ORDER_NUMBER_MAX_ATTEMPTS - 1) {
+          throw error;
+        }
+        console.warn(`Order number collision, retrying (attempt ${attempt + 2}/${ORDER_NUMBER_MAX_ATTEMPTS})`);
+      }
     }
 
     await order.populate('items.menuItem');
@@ -780,11 +788,13 @@ const refundPayment = async (req, res) => {
   }
 };
 
-// Helper function to generate unique order number
+// Helper function to generate a unique 5-digit order number
+const ORDER_NUMBER_LENGTH = 5;
+const ORDER_NUMBER_MAX_ATTEMPTS = 25;
+
 const generateOrderNumber = () => {
-  const timestamp = Date.now().toString().slice(-6);
-  const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-  return `ORD${timestamp}${random}`;
+  const max = 10 ** ORDER_NUMBER_LENGTH;
+  return crypto.randomInt(0, max).toString().padStart(ORDER_NUMBER_LENGTH, '0');
 };
 
 // Export all functions

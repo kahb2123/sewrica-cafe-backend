@@ -3,7 +3,7 @@ const crypto = require('crypto');
 
 class LotteryService {
   // Generate a unique 5-digit lottery ticket number
-  static generateTicketNumber(orderNumber, customerId) {
+  static generateTicketNumber() {
     // Create a simple 5-digit number based on timestamp and order
     const timestamp = Date.now().toString().slice(-3);
     const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
