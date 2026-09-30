@@ -1,9 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const Ingredient = require('../models/Ingredient');
+const IngredientWithdrawal = require('../models/IngredientWithdrawal');
 const { protect, authorize } = require('../middleware/authMiddleware');
 
 router.use(protect, authorize('admin', 'supply_chain'));
+
+const isNonNegativeNumber = (value) => Number.isFinite(Number(value)) && Number(value) >= 0;
 
 router.get('/', async (req, res) => {
   try {
@@ -16,15 +19,90 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { name, unit, quantity = 0, reorderLevel = 0, supplier = '' } = req.body;
-    if (!name || !unit || Number(quantity) < 0 || Number(reorderLevel) < 0) {
-      return res.status(400).json({ success: false, message: 'Name, unit, and valid stock values are required' });
+    const { name, unit, quantity = 0, unitPrice = 0, reorderLevel = 0, supplier = '' } = req.body;
+    if (!name || !unit || !isNonNegativeNumber(quantity) || !isNonNegativeNumber(unitPrice) || !isNonNegativeNumber(reorderLevel)) {
+      return res.status(400).json({ success: false, message: 'Name, unit, and valid stock and price values are required' });
     }
-    const ingredient = await Ingredient.create({ name, unit, quantity: Number(quantity), reorderLevel: Number(reorderLevel), supplier });
+    const ingredient = await Ingredient.create({
+      name,
+      unit,
+      quantity: Number(quantity),
+      unitPrice: Number(unitPrice),
+      reorderLevel: Number(reorderLevel),
+      supplier
+    });
     res.status(201).json({ success: true, data: ingredient });
   } catch (error) {
     const status = error.code === 11000 ? 409 : 500;
     res.status(status).json({ success: false, message: error.code === 11000 ? 'Ingredient already exists' : 'Failed to create ingredient' });
+  }
+});
+
+// ========== STOCK OUT (withdrawals) ==========
+// The availability check lives in the query filter so MongoDB applies it and the
+// decrement in one atomic step. Two concurrent withdrawals cannot overdraw stock.
+
+router.get('/withdrawals', async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const withdrawals = await IngredientWithdrawal.find().sort({ createdAt: -1 }).limit(limit);
+    res.json({ success: true, count: withdrawals.length, data: withdrawals });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to load withdrawals' });
+  }
+});
+
+router.post('/withdrawals', async (req, res) => {
+  try {
+    const { ingredientId } = req.body;
+    const quantity = Number(req.body.quantity);
+    const reason = IngredientWithdrawal.WITHDRAWAL_REASONS.includes(req.body.reason)
+      ? req.body.reason
+      : 'consumption';
+    const note = String(req.body.note || '').trim();
+
+    if (!ingredientId) {
+      return res.status(400).json({ success: false, message: 'Select an ingredient' });
+    }
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      return res.status(400).json({ success: false, message: 'Amount must be greater than 0' });
+    }
+
+    const ingredient = await Ingredient.findOneAndUpdate(
+      { _id: ingredientId, quantity: { $gte: quantity } },
+      { $inc: { quantity: -quantity } },
+      { new: true, runValidators: true }
+    );
+
+    if (!ingredient) {
+      const current = await Ingredient.findById(ingredientId);
+      if (!current) {
+        return res.status(404).json({ success: false, message: 'Ingredient not found' });
+      }
+      return res.status(400).json({
+        success: false,
+        message: `Only ${current.quantity} ${current.unit} of ${current.name} is available in stock`
+      });
+    }
+
+    const unitPrice = Number(ingredient.unitPrice) || 0;
+    const withdrawal = await IngredientWithdrawal.create({
+      ingredient: ingredient._id,
+      ingredientName: ingredient.name,
+      unit: ingredient.unit,
+      quantity,
+      unitPrice,
+      totalValue: unitPrice * quantity,
+      reason,
+      note,
+      remainingAfter: ingredient.quantity,
+      performedBy: req.user._id,
+      performedByName: req.user.name || ''
+    });
+
+    res.status(201).json({ success: true, data: withdrawal, ingredient });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to record withdrawal' });
   }
 });
 
@@ -40,7 +118,7 @@ router.post('/:id/purchases', async (req, res) => {
       req.params.id,
       {
         $inc: { quantity },
-        $set: { supplier: String(req.body.supplier || '') },
+        $set: { supplier: String(req.body.supplier || ''), unitPrice: unitCost },
         $push: { purchases: { quantity, unitCost, supplier: String(req.body.supplier || ''), purchasedBy: req.user._id } }
       },
       { new: true, runValidators: true }
@@ -57,9 +135,16 @@ router.patch('/:id', async (req, res) => {
     const updates = {};
     if (req.body.name !== undefined) updates.name = req.body.name;
     if (req.body.unit !== undefined) updates.unit = req.body.unit;
-    if (req.body.quantity !== undefined) updates.quantity = Number(req.body.quantity);
-    if (req.body.reorderLevel !== undefined) updates.reorderLevel = Number(req.body.reorderLevel);
     if (req.body.supplier !== undefined) updates.supplier = req.body.supplier;
+
+    for (const field of ['quantity', 'unitPrice', 'reorderLevel']) {
+      if (req.body[field] === undefined) continue;
+      if (!isNonNegativeNumber(req.body[field])) {
+        return res.status(400).json({ success: false, message: `${field} must be a number of 0 or more` });
+      }
+      updates[field] = Number(req.body[field]);
+    }
+
     const ingredient = await Ingredient.findByIdAndUpdate(req.params.id, updates, { new: true, runValidators: true });
     if (!ingredient) return res.status(404).json({ success: false, message: 'Ingredient not found' });
     res.json({ success: true, data: ingredient });

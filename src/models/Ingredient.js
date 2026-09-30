@@ -12,11 +12,19 @@ const ingredientSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   unit: { type: String, required: true, trim: true, enum: ['piece', 'kg', 'g', 'liter', 'ml', 'pack', 'box'] },
   quantity: { type: Number, min: 0, default: 0 },
+  unitPrice: { type: Number, min: 0, default: 0 },
   reorderLevel: { type: Number, min: 0, default: 0 },
   supplier: { type: String, trim: true, default: '' },
   purchases: { type: [purchaseSchema], default: [] }
 }, { timestamps: true });
 
 ingredientSchema.index({ name: 1 }, { unique: true });
+
+ingredientSchema.virtual('totalPrice').get(function () {
+  return Number(this.unitPrice || 0) * Number(this.quantity || 0);
+});
+
+ingredientSchema.set('toJSON', { virtuals: true });
+ingredientSchema.set('toObject', { virtuals: true });
 
 module.exports = mongoose.model('Ingredient', ingredientSchema);
