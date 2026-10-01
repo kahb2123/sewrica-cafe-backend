@@ -108,14 +108,42 @@ const getUserProfile = async (req, res) => {
 
 const { getPermissionsForRole, getPageAccessForRole, roleHierarchy, PERMISSIONS, PAGE_ACCESS, rolePermissions } = require('../config/roleMap');
 
-const getUserPermissions = (req, res) => {  const user = req.user;
+const getUserPermissions = (req, res) => {
+  const user = req.user;
 
   if (!user) {
     return res.status(401).json({ message: 'Not authorized' });
   }
 
-  const permissions = getPermissionsForRole(user.role);
-  const pageAccess = getPageAccessForRole(user.role);
+  const rolePerms = getPermissionsForRole(user.role);
+  const rolePageAccess = getPageAccessForRole(user.role);
+
+  const extraPerms = user.extraPermissions || [];
+  const deniedPerms = user.deniedPermissions || [];
+
+  const mergedPermissions = [
+    ...new Set([
+      ...rolePerms,
+      ...extraPerms,
+    ].filter(p => !deniedPerms.includes(p))),
+  ];
+
+  const pageAccessOverrides = user.pageAccessOverrides || {};
+  const mergedPageAccess = {};
+  for (const [page, access] of Object.entries(PAGE_ACCESS)) {
+    const override = pageAccessOverrides[page];
+    if (override) {
+      mergedPageAccess[page] = {
+        canRead: override.canRead ?? access.read.includes(user.role),
+        canWrite: override.canWrite ?? access.write.includes(user.role),
+      };
+    } else {
+      mergedPageAccess[page] = {
+        canRead: access.read.includes(user.role),
+        canWrite: access.write.includes(user.role),
+      };
+    }
+  }
 
   res.json({
     success: true,
@@ -127,8 +155,8 @@ const getUserPermissions = (req, res) => {  const user = req.user;
       role: user.role,
       isActive: user.isActive,
     },
-    permissions,
-    pageAccess,
+    permissions: mergedPermissions,
+    pageAccess: mergedPageAccess,
     roleHierarchy,
     PAGE_ACCESS,
     PERMISSIONS,
