@@ -151,8 +151,8 @@ const PAGE_ACCESS = {
     write: ['cook', 'chef', 'delivery', 'cashier', 'admin'],
   },
   adminDashboard: {
-    read: ['admin'],
-    write: ['admin'],
+    read: ['admin', 'supply_chain'],
+    write: ['admin', 'supply_chain'],
   },
   adminOrders: {
     read: ['admin', 'cashier'],
