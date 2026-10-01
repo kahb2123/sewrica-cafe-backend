@@ -497,12 +497,14 @@ const getUnifiedReport = async ({ start, end, role, staffId, section } = {}) => 
       avgCookingMinutes: totals.avgCookingMinutes ? Math.round(totals.avgCookingMinutes) : 0
     },
     daily: (wantSales ? facets.daily : []) || []
+      .filter((row) => row._id)
       .map((row) => ({
         date: row._id,
         orders: row.orders,
         paidRevenue: round2(row.paidRevenue)
       })),
     hourly: (wantSales ? facets.hourly : []) || []
+      .filter((row) => row._id)
       .map((row) => ({
         hour: row._id,
         orders: row.orders,
