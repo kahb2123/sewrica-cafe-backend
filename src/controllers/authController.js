@@ -199,6 +199,150 @@ const updatePageAccess = (req, res) => {
   });
 };
 
+const getUserPermissionOverrides = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.userId).select('-password');
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const rolePerms = getPermissionsForRole(user.role);
+    const rolePageAccess = getPageAccessForRole(user.role);
+
+    const mergedPermissions = [
+      ...new Set([
+        ...rolePerms,
+        ...(user.extraPermissions || []),
+      ].filter(p => !(user.deniedPermissions || []).includes(p))),
+    ];
+
+    const mergedPageAccess = {};
+    for (const [page, access] of Object.entries(PAGE_ACCESS)) {
+      const override = (user.pageAccessOverrides || {})[page];
+      if (override) {
+        mergedPageAccess[page] = {
+          canRead: override.canRead ?? access.read.includes(user.role),
+          canWrite: override.canWrite ?? access.write.includes(user.role),
+        };
+      } else {
+        mergedPageAccess[page] = {
+          canRead: access.read.includes(user.role),
+          canWrite: access.write.includes(user.role),
+        };
+      }
+    }
+
+    res.json({
+      success: true,
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+      role: user.role,
+      permissions: mergedPermissions,
+      extraPermissions: user.extraPermissions || [],
+      deniedPermissions: user.deniedPermissions || [],
+      pageAccessOverrides: user.pageAccessOverrides || {},
+      pageAccess: mergedPageAccess,
+      rolePermissions: rolePerms,
+    });
+  } catch (error) {
+    console.error('Error fetching user permission overrides:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+const updateUserPermissions = async (req, res) => {
+  try {
+    const { action, permission } = req.body;
+
+    if (!action || !permission) {
+      return res.status(400).json({ message: 'action and permission are required' });
+    }
+
+    const user = await User.findById(req.params.userId).select('-password');
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const extra = new Set(user.extraPermissions || []);
+    const denied = new Set(user.deniedPermissions || []);
+
+    if (action === 'grant') {
+      extra.add(permission);
+      denied.delete(permission);
+    } else if (action === 'revoke') {
+      // Move from extra (if present) to denied
+      extra.delete(permission);
+      denied.add(permission);
+    } else if (action === 'unrevoke') {
+      denied.delete(permission);
+    } else {
+      return res.status(400).json({ message: 'Invalid action. Use: grant, revoke, or unrevoke' });
+    }
+
+    user.extraPermissions = [...extra];
+    user.deniedPermissions = [...denied];
+    await user.save();
+
+    const rolePerms = getPermissionsForRole(user.role);
+    const mergedPermissions = [
+      ...new Set([
+        ...rolePerms,
+        ...(user.extraPermissions || []),
+      ].filter(p => !(user.deniedPermissions || []).includes(p))),
+    ];
+
+    res.json({
+      success: true,
+      message: `Permission '${permission}' ${action === 'grant' ? 'granted to' : action === 'revoke' ? 'revoked from' : 'un-revoked from'} ${user.name}`,
+      permissions: mergedPermissions,
+      extraPermissions: user.extraPermissions,
+      deniedPermissions: user.deniedPermissions,
+    });
+  } catch (error) {
+    console.error('Error updating user permissions:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+const updateUserPageAccess = async (req, res) => {
+  try {
+    const { page, canRead, canWrite } = req.body;
+
+    if (!page || typeof canRead === 'undefined' || typeof canWrite === 'undefined') {
+      return res.status(400).json({ message: 'page, canRead, and canWrite are required' });
+    }
+
+    const user = await User.findById(req.params.userId).select('-password');
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (!user.pageAccessOverrides) {
+      user.pageAccessOverrides = {};
+    }
+
+    user.pageAccessOverrides[page] = {
+      canRead: !!canRead,
+      canWrite: !!canWrite,
+    };
+
+    await user.save();
+
+    res.json({
+      success: true,
+      message: `Page access updated for ${user.name} on page '${page}'`,
+      pageAccessOverrides: user.pageAccessOverrides,
+    });
+  } catch (error) {
+    console.error('Error updating user page access:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   registerUser,
   loginUser,
@@ -206,4 +350,7 @@ module.exports = {
   getUserPermissions,
   getRoleMap,
   updatePageAccess,
+  getUserPermissionOverrides,
+  updateUserPermissions,
+  updateUserPageAccess,
 };

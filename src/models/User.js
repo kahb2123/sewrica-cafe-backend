@@ -30,6 +30,18 @@ const userSchema = new mongoose.Schema({
   createdAt: {
     type: Date,
     default: Date.now
+  },
+  extraPermissions: {
+    type: [String],
+    default: []
+  },
+  deniedPermissions: {
+    type: [String],
+    default: []
+  },
+  pageAccessOverrides: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
   }
 });
 
