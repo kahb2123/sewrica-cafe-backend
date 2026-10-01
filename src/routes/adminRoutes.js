@@ -54,7 +54,10 @@ router.post('/staff', async (req, res) => {
       phone,
       password: hashedPassword,
       role,
-      isActive: true
+      isActive: true,
+      extraPermissions: req.body.extraPermissions || [],
+      deniedPermissions: req.body.deniedPermissions || [],
+      pageAccessOverrides: req.body.pageAccessOverrides || {}
     });
     
     const staffResponse = staff.toObject();
@@ -71,6 +74,62 @@ router.post('/staff', async (req, res) => {
       success: false,
       message: 'Failed to create staff member' 
     });
+  }
+});
+
+// @desc    Get staff member's permission overrides
+// @route   GET /api/admin/staff/:id/permissions
+router.get('/staff/:id/permissions', async (req, res) => {
+  try {
+    const staff = await User.findById(req.params.id).select('-password');
+    if (!staff) {
+      return res.status(404).json({ success: false, message: 'Staff member not found' });
+    }
+    res.json({
+      success: true,
+      staff: {
+        _id: staff._id,
+        name: staff.name,
+        email: staff.email,
+        role: staff.role,
+      },
+      extraPermissions: staff.extraPermissions || [],
+      deniedPermissions: staff.deniedPermissions || [],
+      pageAccessOverrides: staff.pageAccessOverrides || {},
+    });
+  } catch (error) {
+    console.error('Error fetching staff permissions:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch staff permissions' });
+  }
+});
+
+// @desc    Update staff member's permission overrides
+// @route   PUT /api/admin/staff/:id/permissions
+router.put('/staff/:id/permissions', async (req, res) => {
+  try {
+    const { extraPermissions, deniedPermissions, pageAccessOverrides } = req.body;
+
+    const staff = await User.findById(req.params.id);
+    if (!staff) {
+      return res.status(404).json({ success: false, message: 'Staff member not found' });
+    }
+
+    if (extraPermissions) staff.extraPermissions = extraPermissions;
+    if (deniedPermissions) staff.deniedPermissions = deniedPermissions;
+    if (pageAccessOverrides) staff.pageAccessOverrides = pageAccessOverrides;
+
+    await staff.save();
+
+    res.json({
+      success: true,
+      message: 'Staff permissions updated',
+      extraPermissions: staff.extraPermissions,
+      deniedPermissions: staff.deniedPermissions,
+      pageAccessOverrides: staff.pageAccessOverrides,
+    });
+  } catch (error) {
+    console.error('Error updating staff permissions:', error);
+    res.status(500).json({ success: false, message: 'Failed to update staff permissions' });
   }
 });
 
