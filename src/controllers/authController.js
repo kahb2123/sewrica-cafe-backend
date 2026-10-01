@@ -108,8 +108,7 @@ const getUserProfile = async (req, res) => {
 
 const { getPermissionsForRole, getPageAccessForRole, roleHierarchy, PERMISSIONS, PAGE_ACCESS, rolePermissions } = require('../config/roleMap');
 
-const getUserPermissions = (req, res) => {
-  const user = req.user;
+const getUserPermissions = (req, res) => {  const user = req.user;
 
   if (!user) {
     return res.status(401).json({ message: 'Not authorized' });
@@ -155,10 +154,56 @@ const getRoleMap = (req, res) => {
   });
 };
 
+const updatePageAccess = (req, res) => {
+  const { role, page, action } = req.body;
+
+  if (!role || !page || !action) {
+    return res.status(400).json({ message: 'role, page, and action are required (action: "grant"|"revoke")' });
+  }
+
+  if (!PAGE_ACCESS[page]) {
+    return res.status(404).json({ message: `Page '${page}' not found in PAGE_ACCESS` });
+  }
+
+  if (!PAGE_ACCESS[page].read) PAGE_ACCESS[page].read = [];
+  if (!PAGE_ACCESS[page].write) PAGE_ACCESS[page].write = [];
+
+  const readSet = new Set(PAGE_ACCESS[page].read);
+  const writeSet = new Set(PAGE_ACCESS[page].write);
+
+  if (action === 'grant') {
+    readSet.add(role);
+    writeSet.add(role);
+  } else if (action === 'revoke') {
+    readSet.delete(role);
+    writeSet.delete(role);
+  } else if (action === 'grant_read') {
+    readSet.add(role);
+  } else if (action === 'revoke_read') {
+    readSet.delete(role);
+  } else if (action === 'grant_write') {
+    writeSet.add(role);
+  } else if (action === 'revoke_write') {
+    writeSet.delete(role);
+  } else {
+    return res.status(400).json({ message: 'Invalid action. Use: grant, revoke, grant_read, revoke_read, grant_write, revoke_write' });
+  }
+
+  PAGE_ACCESS[page].read = [...readSet];
+  PAGE_ACCESS[page].write = [...writeSet];
+
+  res.json({
+    success: true,
+    message: `Page access updated for role '${role}' on page '${page}'`,
+    pageAccess: PAGE_ACCESS[page],
+  });
+};
+
 module.exports = {
   registerUser,
   loginUser,
   getUserProfile,
   getUserPermissions,
   getRoleMap,
+  updatePageAccess,
 };
