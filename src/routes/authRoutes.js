@@ -3,15 +3,18 @@ const router = express.Router();
 const { 
   registerUser, 
   loginUser, 
-  getUserProfile 
+  getUserProfile,
+  getUserPermissions,
+  getRoleMap
 } = require('../controllers/authController');
 const { protect } = require('../middleware/authMiddleware');
+const { requireRole, requirePermission } = require('../middleware/roleMiddleware');
 
-// Public routes
 router.post('/register', registerUser);
 router.post('/login', loginUser);
 
-// Protected routes
 router.get('/profile', protect, getUserProfile);
+router.get('/permissions', protect, getUserPermissions);
+router.get('/roles', protect, requireRole('admin'), getRoleMap);
 
 module.exports = router;

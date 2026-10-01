@@ -106,8 +106,59 @@ const getUserProfile = async (req, res) => {
   }
 };
 
+const { getPermissionsForRole, getPageAccessForRole, roleHierarchy, PERMISSIONS, PAGE_ACCESS, rolePermissions } = require('../config/roleMap');
+
+const getUserPermissions = (req, res) => {
+  const user = req.user;
+
+  if (!user) {
+    return res.status(401).json({ message: 'Not authorized' });
+  }
+
+  const permissions = getPermissionsForRole(user.role);
+  const pageAccess = getPageAccessForRole(user.role);
+
+  res.json({
+    success: true,
+    user: {
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      role: user.role,
+      isActive: user.isActive,
+    },
+    permissions,
+    pageAccess,
+    roleHierarchy,
+    PAGE_ACCESS,
+    PERMISSIONS,
+  });
+};
+
+const getRoleMap = (req, res) => {
+  const roles = Object.keys(rolePermissions).map((role) => ({
+    role,
+    label: role.charAt(0).toUpperCase() + role.slice(1),
+    level: roleHierarchy[role] ?? 0,
+    permissions: rolePermissions[role],
+    pageAccess: getPageAccessForRole(role),
+    activeStaffCount: 0,
+  }));
+
+  res.json({
+    success: true,
+    roleHierarchy,
+    permissions: PERMISSIONS,
+    pageAccess: PAGE_ACCESS,
+    roles,
+  });
+};
+
 module.exports = {
   registerUser,
   loginUser,
-  getUserProfile
+  getUserProfile,
+  getUserPermissions,
+  getRoleMap,
 };
