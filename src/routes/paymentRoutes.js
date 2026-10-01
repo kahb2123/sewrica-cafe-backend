@@ -131,6 +131,9 @@ router.post('/cash-payment', protect, async (req, res) => {
     order.amountReceived = amountReceived;
     order.change = change;
     order.paidAt = new Date();
+    order.processedBy = req.user._id;
+    order.processedByName = req.user.name || '';
+    order.processedAt = order.paidAt;
 
     await order.save();
 

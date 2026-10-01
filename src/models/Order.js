@@ -8,6 +8,11 @@ const orderItemSchema = new mongoose.Schema({
     required: true
   },
   name: String,
+  // Snapshotted at order time so reports can group by category without a lookup
+  category: {
+    type: String,
+    default: 'other'
+  },
   quantity: {
     type: Number,
     required: true,
@@ -62,6 +67,17 @@ const orderSchema = new mongoose.Schema({
   amountReceived: Number,
   change: Number,
   paidAt: Date,
+  // Who took the payment — required for per-cashier reporting
+  processedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  processedByName: {
+    type: String,
+    default: ''
+  },
+  processedAt: Date,
   deliveryMethod: {
     type: String,
     enum: ['delivery', 'pickup'],
@@ -239,5 +255,7 @@ orderSchema.index({ assignedChef: 1, status: 1 });
 orderSchema.index({ assignedDelivery: 1, status: 1 });
 orderSchema.index({ customer: 1, createdAt: -1 });
 orderSchema.index({ lotteryTicketNumber: 1 });
+orderSchema.index({ createdAt: -1, paymentStatus: 1 });
+orderSchema.index({ processedBy: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Order', orderSchema);

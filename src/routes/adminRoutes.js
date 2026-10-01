@@ -7,102 +7,8 @@ const User = require('../models/User');
 const PDFDocument = require('pdfkit');
 const { protect, adminOnly } = require('../middleware/authMiddleware');
 const bcrypt = require('bcryptjs');
+const { getUnifiedReport, buildCsv, buildPdf } = require('../services/reportService');
 
-const salesFilter = {
-  status: { $ne: 'cancelled' }
-};
-
-const buildSalesReport = async (startDate, endDate) => {
-  const orders = await Order.find({
-    createdAt: { $gte: startDate, $lt: endDate },
-    ...salesFilter
-  })
-    .populate('items.menuItem')
-    .populate('assignedDelivery', 'name');
-
-  const totalOrders = orders.length;
-  const totalRevenue = orders.reduce((sum, order) => sum + (Number(order.totalAmount) || 0), 0);
-  const categoryBreakdown = {};
-  const deliveryBreakdown = {};
-  const itemSales = {};
-
-  orders.forEach(order => {
-    order.items.forEach(item => {
-      const category = item.menuItem?.category || item.category || 'other';
-      categoryBreakdown[category] ||= { itemsSold: 0, revenue: 0 };
-      categoryBreakdown[category].itemsSold += item.quantity;
-      categoryBreakdown[category].revenue += item.price * item.quantity;
-
-      const itemName = item.name || item.menuItem?.name || 'Unknown item';
-      itemSales[itemName] ||= { quantity: 0, revenue: 0 };
-      itemSales[itemName].quantity += item.quantity;
-      itemSales[itemName].revenue += item.price * item.quantity;
-    });
-
-    if (order.assignedDelivery) {
-      const deliveryName = order.assignedDelivery.name || String(order.assignedDelivery);
-      deliveryBreakdown[deliveryName] ||= { ordersCount: 0, totalAmount: 0 };
-      deliveryBreakdown[deliveryName].ordersCount += 1;
-      deliveryBreakdown[deliveryName].totalAmount += Number(order.totalAmount) || 0;
-    }
-  });
-
-  return {
-    totalOrders,
-    totalRevenue,
-    averageOrderValue: totalOrders ? totalRevenue / totalOrders : 0,
-    categoryBreakdown: Object.entries(categoryBreakdown).map(([category, data]) => ({ category, ...data })),
-    deliveryBreakdown: Object.entries(deliveryBreakdown).map(([name, data]) => ({ name, ...data })),
-    topItems: Object.entries(itemSales)
-      .map(([name, data]) => ({ name, ...data }))
-      .sort((a, b) => b.quantity - a.quantity)
-      .slice(0, 10)
-  };
-};
-
-const csvCell = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
-
-const getReportPeriod = (type, start, end) => {
-  if (type === 'custom') {
-    if (!start || !end) throw new Error('Start and end dates are required');
-    const startDate = new Date(start);
-    const endDate = new Date(end);
-    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) throw new Error('Invalid date range');
-    startDate.setHours(0, 0, 0, 0);
-    endDate.setHours(0, 0, 0, 0);
-    if (startDate > endDate) throw new Error('Start date must be before or equal to end date');
-    endDate.setDate(endDate.getDate() + 1);
-    return [startDate, endDate];
-  }
-
-  if (type === 'daily') {
-    const date = new Date(start || new Date());
-    if (Number.isNaN(date.getTime())) throw new Error('Invalid date');
-    date.setHours(0, 0, 0, 0);
-    const nextDay = new Date(date);
-    nextDay.setDate(nextDay.getDate() + 1);
-    return [date, nextDay];
-  }
-
-  if (type === 'weekly') {
-    const date = new Date(start || new Date());
-    if (Number.isNaN(date.getTime())) throw new Error('Invalid week date');
-    date.setHours(0, 0, 0, 0);
-    const weekStart = start ? date : new Date(date.setDate(date.getDate() - date.getDay()));
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekEnd.getDate() + 7);
-    return [weekStart, weekEnd];
-  }
-
-  if (type === 'monthly') {
-    const date = new Date(start || new Date());
-    if (Number.isNaN(date.getTime())) throw new Error('Invalid month date');
-    const monthStart = new Date(date.getFullYear(), date.getMonth(), 1);
-    return [monthStart, new Date(date.getFullYear(), date.getMonth() + 1, 1)];
-  }
-
-  throw new Error('Unsupported report type');
-};
 
 // Protect all admin routes - only admins can access
 router.use(protect);
@@ -576,154 +482,52 @@ router.patch('/users/:id/toggle-status', async (req, res) => {
   }
 });
 
-// ========== REPORT ENDPOINTS ==========
+// ========== UNIFIED REPORTS ==========
+// One endpoint replaces /reports/{daily,weekly,monthly,custom} and /reports/export/:type.
 
-// @desc    Get daily report
-// @route   GET /api/admin/reports/daily
-router.get('/reports/daily', async (req, res) => {
+router.get('/reports/unified', async (req, res) => {
   try {
-    const { date } = req.query;
-    const reportDate = date ? new Date(date) : new Date();
-    reportDate.setHours(0, 0, 0, 0);
-    const nextDay = new Date(reportDate);
-    nextDay.setDate(nextDay.getDate() + 1);
-    
-    res.json(await buildSalesReport(reportDate, nextDay));
-  } catch (error) {
-    console.error('Daily report error:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// @desc    Get weekly report
-// @route   GET /api/admin/reports/weekly
-router.get('/reports/weekly', async (req, res) => {
-  try {
-    const { week } = req.query;
-    const now = new Date();
-    const startOfWeek = week ? new Date(week) : new Date(now.setDate(now.getDate() - now.getDay()));
-    startOfWeek.setHours(0, 0, 0, 0);
-    const endOfWeek = new Date(startOfWeek);
-    endOfWeek.setDate(endOfWeek.getDate() + 7);
-    
-    res.json({
-      ...(await buildSalesReport(startOfWeek, endOfWeek)),
-      period: 'weekly'
+    const report = await getUnifiedReport({
+      start: req.query.start,
+      end: req.query.end,
+      role: req.query.role,
+      staffId: req.query.staffId
     });
+    res.json({ success: true, data: report });
   } catch (error) {
-    console.error('Weekly report error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(400).json({ success: false, message: error.message || 'Failed to build report' });
   }
 });
 
-// @desc    Get monthly report
-// @route   GET /api/admin/reports/monthly
-router.get('/reports/monthly', async (req, res) => {
+router.get('/reports/export', async (req, res) => {
   try {
-    const { month } = req.query;
-    const now = new Date();
-    const startOfMonth = month ? new Date(month) : new Date(now.getFullYear(), now.getMonth(), 1);
-    const endExclusive = new Date(startOfMonth.getFullYear(), startOfMonth.getMonth() + 1, 1);
-    res.json({
-      ...(await buildSalesReport(startOfMonth, endExclusive)),
-      period: 'monthly'
-    });
-  } catch (error) {
-    console.error('Monthly report error:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// @desc    Export a sales report as CSV or PDF
-// @route   GET /api/admin/reports/export/:type
-router.get('/reports/export/:type', async (req, res) => {
-  try {
-    const { type } = req.params;
     const format = String(req.query.format || 'csv').toLowerCase();
-    if (!['daily', 'weekly', 'monthly', 'custom'].includes(type)) {
-      return res.status(400).json({ message: 'Unsupported report type' });
-    }
     if (!['csv', 'pdf'].includes(format)) {
-      return res.status(400).json({ message: 'Format must be csv or pdf' });
+      return res.status(400).json({ success: false, message: 'Format must be csv or pdf' });
     }
 
-    const [startDate, endDate] = getReportPeriod(type, req.query.start, req.query.end);
-    const report = await buildSalesReport(startDate, endDate);
-    const filename = `report-${type}.${format}`;
+    const report = await getUnifiedReport({
+      start: req.query.start,
+      end: req.query.end,
+      role: req.query.role
+    });
+    const filename = `sewrica-report-${report.period.start}-to-${report.period.end}.${format}`;
 
     if (format === 'csv') {
-      const rows = [
-        ['Sales Report', type],
-        ['Total Orders', report.totalOrders],
-        ['Total Revenue', report.totalRevenue],
-        ['Average Order Value', report.averageOrderValue],
-        [],
-        ['Top Selling Items'],
-        ['Item', 'Quantity', 'Revenue'],
-        ...report.topItems.map(item => [item.name, item.quantity, item.revenue]),
-        [],
-        ['Sales by Category'],
-        ['Category', 'Items Sold', 'Revenue'],
-        ...report.categoryBreakdown.map(item => [item.category, item.itemsSold, item.revenue]),
-        [],
-        ['Delivery Performance'],
-        ['Delivery Person', 'Orders', 'Amount'],
-        ...report.deliveryBreakdown.map(item => [item.name, item.ordersCount, item.totalAmount])
-      ];
-      const csv = rows.map(row => row.map(csvCell).join(',')).join('\n');
-      res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${filename}"` });
-      return res.send(csv);
+      res.set({
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${filename}"`
+      });
+      return res.send(buildCsv(report));
     }
 
-    const document = new PDFDocument({ margin: 48 });
-    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="${filename}"` });
-    document.pipe(res);
-    document.fontSize(18).text(`Sewrica Cafe ${type} Sales Report`);
-    document.moveDown().fontSize(11).text(`Period: ${startDate.toISOString().slice(0, 10)} to ${new Date(endDate - 1).toISOString().slice(0, 10)}`);
-    document.moveDown().text(`Total orders: ${report.totalOrders}`);
-    document.text(`Total revenue: ${report.totalRevenue.toLocaleString()} ETB`);
-    document.text(`Average order value: ${report.averageOrderValue.toLocaleString()} ETB`);
-    document.moveDown().fontSize(14).text('Top Selling Items');
-    document.fontSize(10);
-    report.topItems.forEach(item => document.text(`${item.name}: ${item.quantity} items, ${item.revenue.toLocaleString()} ETB`));
-    document.moveDown().fontSize(14).text('Sales by Category');
-    document.fontSize(10);
-    report.categoryBreakdown.forEach(item => document.text(`${item.category}: ${item.itemsSold} items, ${item.revenue.toLocaleString()} ETB`));
-    document.moveDown().fontSize(14).text('Delivery Performance');
-    document.fontSize(10);
-    report.deliveryBreakdown.forEach(item => document.text(`${item.name}: ${item.ordersCount} orders, ${item.totalAmount.toLocaleString()} ETB`));
-    return document.end();
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${filename}"`
+    });
+    return buildPdf(report, PDFDocument).pipe(res);
   } catch (error) {
-    console.error('Report export error:', error);
-    return res.status(400).json({ message: error.message || 'Failed to export report' });
-  }
-});
-
-// @desc    Get a report for a custom date range
-// @route   GET /api/admin/reports/custom
-router.get('/reports/custom', async (req, res) => {
-  try {
-    const { start, end } = req.query;
-    if (!start || !end) {
-      return res.status(400).json({ message: 'Start and end dates are required' });
-    }
-
-    const startDate = new Date(start);
-    const endDate = new Date(end);
-    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
-      return res.status(400).json({ message: 'Invalid date range' });
-    }
-    startDate.setHours(0, 0, 0, 0);
-    endDate.setHours(0, 0, 0, 0);
-    if (startDate > endDate) {
-      return res.status(400).json({ message: 'Start date must be before or equal to end date' });
-    }
-
-    endDate.setDate(endDate.getDate() + 1);
-    res.json(await buildSalesReport(startDate, endDate));
-  } catch (error) {
-    console.error('Custom report error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(400).json({ success: false, message: error.message || 'Failed to export report' });
   }
 });
 

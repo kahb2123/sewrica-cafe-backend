@@ -70,6 +70,7 @@ const createOrder = async (req, res) => {
       orderItems.push({
         menuItem: menuItem._id,
         name: menuItem.name,
+        category: menuItem.category || 'other',
         quantity: Number(item.quantity),
         price: menuItem.price
       });
@@ -538,6 +539,9 @@ const confirmPayment = async (req, res) => {
     order.paymentStatus = 'completed';
     order.stripePaymentIntentId = paymentIntentId;
     order.paidAt = new Date();
+    order.processedBy = req.user._id;
+    order.processedByName = req.user.name || '';
+    order.processedAt = order.paidAt;
     await order.save();
 
     // ========== SOCKET.IO: Notify about payment completion ==========
@@ -612,6 +616,9 @@ const processCashPayment = async (req, res) => {
     order.amountReceived = amountReceived;
     order.change = change;
     order.paidAt = new Date();
+    order.processedBy = req.user._id;
+    order.processedByName = req.user.name || '';
+    order.processedAt = order.paidAt;
     await order.save();
 
     // ========== SOCKET.IO: Notify about cash payment ==========
