@@ -216,9 +216,11 @@ const getStaffPerformance = async (start, end, roleFilter) => {
         $group: {
           _id: '$processedBy',
           totalOrders: { $sum: 1 },
-          completed: { $sum: 1 },
-          cancelled: { $sum: 0 },
-          revenue: { $sum: { $ifNull: ['$totalAmount', 0] } },
+          completed: { $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, 1, 0] } },
+          cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
+          revenue: {
+            $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, { $ifNull: ['$totalAmount', 0] }, 0] }
+          },
           cashCollected: { $sum: { $ifNull: ['$amountReceived', 0] } }
         }
       }
@@ -298,6 +300,43 @@ const getStaffDetail = async (staffId, start, end) => {
           totalAmount: { $sum: { $ifNull: ['$totalAmount', 0] } },
           completed: { $sum: { $cond: [{ $in: ['$status', ['ready', 'delivered']] }, 1, 0] } },
           cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
+          paid: { $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, 1, 0] } },
+          paidAmount: {
+            $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, { $ifNull: ['$totalAmount', 0] }, 0] }
+          },
+          outstanding: {
+            $sum: {
+              $cond: [
+                { $in: ['$paymentStatus', ['pending', 'processing']] },
+                { $ifNull: ['$totalAmount', 0] },
+                0
+              ]
+            }
+          },
+          cookingTimeSum: {
+            $sum: { $cond: [{ $gt: ['$cookingTime', 0] }, '$cookingTime', 0] }
+          },
+          cookingTimeCount: {
+            $sum: { $cond: [{ $gt: ['$cookingTime', 0] }, 1, 0] }
+          },
+          deliveryTimeSum: {
+            $sum: {
+              $cond: [
+                { $and: [{ $gt: ['$deliveryCompletedAt', null] }, { $gt: ['$cookingStartedAt', null] }] },
+                { $subtract: ['$deliveryCompletedAt', '$cookingStartedAt'] },
+                0
+              ]
+            }
+          },
+          deliveryTimeCount: {
+            $sum: {
+              $cond: [
+                { $and: [{ $gt: ['$deliveryCompletedAt', null] }, { $gt: ['$cookingStartedAt', null] }] },
+                1,
+                0
+              ]
+            }
+          },
           avgCookingMinutes: { $avg: { $cond: [{ $gt: ['$cookingTime', 0] }, '$cookingTime', null] } }
         }
       },
@@ -314,24 +353,21 @@ const getStaffDetail = async (staffId, start, end) => {
       .lean()
   ]);
 
-  const totalOrders = orders.length ? daily.reduce((sum, row) => sum + row.count, 0) : 0;
-  const paidOrders = orders.filter((order) => order.paymentStatus === 'completed');
+  // Summary figures come from the complete daily aggregation, NOT the 60-order
+  // sample used for the recent-orders list below. Deriving them from the
+  // truncated list silently undercounted every metric for staff with >60 orders.
+  const totalOrders = daily.reduce((sum, row) => sum + row.count, 0);
+  const completedOrders = daily.reduce((sum, row) => sum + row.completed, 0);
+  const cancelledOrders = daily.reduce((sum, row) => sum + row.cancelled, 0);
+  const paidOrders = daily.reduce((sum, row) => sum + row.paid, 0);
   const totalAmount = daily.reduce((sum, row) => sum + row.totalAmount, 0);
+  const outstandingRevenue = daily.reduce((sum, row) => sum + row.outstanding, 0);
   const totalItemsCooked = items.reduce((sum, row) => sum + row.count, 0);
-  const cookingTimes = orders
-    .map((order) => Number(order.cookingTime) || 0)
-    .filter((value) => value > 0);
-  const totalCookingTime = cookingTimes.reduce((sum, value) => sum + value, 0);
 
-  const deliveryMinutes = orders
-    .filter((order) => order.deliveryCompletedAt && order.cookingStartedAt)
-    .map((order) => Math.round((new Date(order.deliveryCompletedAt) - new Date(order.cookingStartedAt)) / 60000))
-    .filter((value) => value > 0);
-  const totalDeliveryTime = deliveryMinutes.reduce((sum, value) => sum + value, 0);
-
-  const completedOrders = orders.filter((order) => ['ready', 'delivered'].includes(order.status)).length;
-  const cancelledOrders = orders.filter((order) => order.status === 'cancelled').length;
-  const unpaidOrders = orders.filter((order) => order.paymentStatus !== 'completed').length;
+  const cookingTimeSum = daily.reduce((sum, row) => sum + (row.cookingTimeSum || 0), 0);
+  const cookingTimeCount = daily.reduce((sum, row) => sum + (row.cookingTimeCount || 0), 0);
+  const deliveryTimeSum = daily.reduce((sum, row) => sum + (row.deliveryTimeSum || 0), 0);
+  const deliveryTimeCount = daily.reduce((sum, row) => sum + (row.deliveryTimeCount || 0), 0);
 
   return {
     staffId: member._id,
@@ -344,25 +380,24 @@ const getStaffDetail = async (staffId, start, end) => {
       totalOrders,
       completedOrders,
       cancelledOrders,
-      unpaidOrders,
-      paidOrders: paidOrders.length,
-      paidRevenue: round2(paidOrders.reduce((sum, order) => sum + (Number(order.totalAmount) || 0), 0)),
-      outstandingRevenue: round2(
-        orders
-          .filter((order) => ['pending', 'processing'].includes(order.paymentStatus))
-          .reduce((sum, order) => sum + (Number(order.totalAmount) || 0), 0)
-      ),
+      unpaidOrders: Math.max(0, totalOrders - paidOrders - cancelledOrders),
+      paidOrders,
+      paidRevenue: round2(daily.reduce((sum, row) => sum + (row.paidAmount || 0), 0)),
+      outstandingRevenue: round2(outstandingRevenue),
       completionRate: totalOrders ? Math.round((completedOrders / totalOrders) * 100) : 0,
       cancellationRate: totalOrders ? Math.round((cancelledOrders / totalOrders) * 100) : 0,
       totalItemsCooked,
-      totalCookingTime,
-      averageCookingTime: cookingTimes.length ? Math.round(totalCookingTime / cookingTimes.length) : 0,
-      slowestCookingTime: cookingTimes.length ? Math.max(...cookingTimes) : 0,
+      totalCookingTime: Math.round(cookingTimeSum / 60000),
+      averageCookingTime: cookingTimeCount ? Math.round(cookingTimeSum / cookingTimeCount / 60000) : 0,
+      slowestCookingTime: Math.max(
+        ...orders.map((order) => Number(order.cookingTime) || 0).filter((value) => value > 0),
+        0
+      ),
       totalDeliveries: role === 'delivery' ? totalOrders : undefined,
       totalAmount: role === 'delivery' ? round2(totalAmount) : undefined,
-      totalDeliveryTime: role === 'delivery' ? totalDeliveryTime : undefined,
-      averageDeliveryTime: deliveryMinutes.length
-        ? Math.round(totalDeliveryTime / deliveryMinutes.length)
+      totalDeliveryTime: role === 'delivery' ? Math.round(deliveryTimeSum / 60000) : undefined,
+      averageDeliveryTime: role === 'delivery'
+        ? (deliveryTimeCount ? Math.round(deliveryTimeSum / deliveryTimeCount / 60000) : undefined)
         : undefined
     },
     itemsBreakdown: Object.fromEntries(items.map((row) => [row._id, row.count])),
@@ -393,23 +428,31 @@ const getStaffDetail = async (staffId, start, end) => {
 };
 
 // ========== UNIFIED REPORT ==========
+//
+// `section` lets callers request only one part of the report (sales | items |
+// staff). Skipping the unneeded aggregations makes exports faster and keeps the
+// generated file focused on what the caller actually asked for.
 
-const getUnifiedReport = async ({ start, end, role, staffId } = {}) => {
+const getUnifiedReport = async ({ start, end, role, staffId, section } = {}) => {
   const range = buildDateRange(start, end);
+  const wantSales = !section || section === 'sales';
+  const wantItems = !section || section === 'items';
+  const wantStaff = !section || section === 'staff';
 
   const [facets, staff, staffDetail] = await Promise.all([
-    getOrderFacets(range.start, range.end),
-    getStaffPerformance(range.start, range.end, role),
+    wantSales || wantItems ? getOrderFacets(range.start, range.end) : Promise.resolve({}),
+    wantStaff ? getStaffPerformance(range.start, range.end, role) : Promise.resolve([]),
     staffId ? getStaffDetail(staffId, range.start, range.end) : Promise.resolve(null)
   ]);
 
-  const totals = (facets.totals || [])[0] || {};
+  const totalsList = wantSales ? (facets.totals || []) : [];
+  const totals = totalsList[0] || {};
   const totalOrders = totals.totalOrders || 0;
   const paidOrders = totals.paidOrders || 0;
   const paidRevenue = round2(totals.paidRevenue);
   const outstandingRevenue = round2(totals.outstandingRevenue);
 
-  const categories = (facets.categories || [])
+  const categories = (wantItems ? facets.categories : []) || []
     .filter((row) => row._id)
     .map((row) => ({
       category: row._id,
@@ -418,13 +461,14 @@ const getUnifiedReport = async ({ start, end, role, staffId } = {}) => {
       share: paidRevenue ? Math.round((row.revenue / paidRevenue) * 100) : 0
     }));
 
-  const topItems = (facets.topItems || []).map((row) => ({
-    name: row._id,
-    quantity: row.quantity,
-    revenue: round2(row.revenue)
-  }));
+  const topItems = (wantItems ? facets.topItems : []) || []
+    .map((row) => ({
+      name: row._id,
+      quantity: row.quantity,
+      revenue: round2(row.revenue)
+    }));
 
-  const paymentMethods = (facets.paymentMethods || [])
+  const paymentMethods = (wantSales ? facets.paymentMethods : []) || []
     .filter((row) => row._id)
     .map((row) => ({
       method: row._id,
@@ -434,6 +478,7 @@ const getUnifiedReport = async ({ start, end, role, staffId } = {}) => {
     }));
 
   return {
+    section: section || 'all',
     period: {
       start: range.startLabel,
       end: range.endLabel,
@@ -451,19 +496,22 @@ const getUnifiedReport = async ({ start, end, role, staffId } = {}) => {
       averageOrderValue: paidOrders ? round2(paidRevenue / paidOrders) : 0,
       avgCookingMinutes: totals.avgCookingMinutes ? Math.round(totals.avgCookingMinutes) : 0
     },
-    daily: (facets.daily || []).map((row) => ({
-      date: row._id,
-      orders: row.orders,
-      paidRevenue: round2(row.paidRevenue)
-    })),
-    hourly: (facets.hourly || []).map((row) => ({
-      hour: row._id,
-      orders: row.orders,
-      paidRevenue: round2(row.paidRevenue)
-    })),
-    statusBreakdown: (facets.statusBreakdown || []).map((row) => ({ status: row._id, count: row.count })),
+    daily: (wantSales ? facets.daily : []) || []
+      .map((row) => ({
+        date: row._id,
+        orders: row.orders,
+        paidRevenue: round2(row.paidRevenue)
+      })),
+    hourly: (wantSales ? facets.hourly : []) || []
+      .map((row) => ({
+        hour: row._id,
+        orders: row.orders,
+        paidRevenue: round2(row.paidRevenue)
+      })),
+    statusBreakdown: (wantSales ? facets.statusBreakdown : []) || []
+      .map((row) => ({ status: row._id, count: row.count })),
     paymentMethods,
-    orderChannels: (facets.orderChannels || [])
+    orderChannels: (wantSales ? facets.orderChannels : []) || []
       .filter((row) => row._id)
       .map((row) => ({ channel: row._id, count: row.count })),
     categories,
@@ -479,48 +527,83 @@ const csvCell = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
 
 const buildCsv = (report) => {
   const t = report.totals;
+  const section = report.section || 'all';
+  const wantSales = section === 'all' || section === 'sales';
+  const wantItems = section === 'all' || section === 'items';
+  const wantStaff = section === 'all' || section === 'staff';
+
   const rows = [
     ['Sewrica Cafe Report'],
     ['Period', `${report.period.start} to ${report.period.end}`, `${report.period.days} days`],
-    [],
-    ['SUMMARY'],
-    ['Total orders', t.totalOrders],
-    ['Paid orders', t.paidOrders],
-    ['Cancelled orders', t.cancelledOrders],
-    ['Unpaid orders', t.unpaidOrders],
-    ['Paid revenue (ETB)', t.paidRevenue],
-    ['Outstanding revenue (ETB)', t.outstandingRevenue],
-    ['Refunded value (ETB)', t.refundedValue],
-    ['Average order value (ETB)', t.averageOrderValue],
-    ['Average cooking minutes', t.avgCookingMinutes],
-    [],
-    ['DAILY'],
-    ['Date', 'Orders', 'Paid revenue (ETB)'],
-    ...report.daily.map((row) => [row.date, row.orders, row.paidRevenue]),
-    [],
-    ['TOP ITEMS'],
-    ['Item', 'Quantity', 'Revenue (ETB)'],
-    ...report.topItems.map((row) => [row.name, row.quantity, row.revenue]),
-    [],
-    ['SALES BY CATEGORY'],
-    ['Category', 'Items sold', 'Revenue (ETB)', 'Share %'],
-    ...report.categories.map((row) => [row.category, row.itemsSold, row.revenue, row.share]),
-    [],
-    ['PAYMENT METHODS'],
-    ['Method', 'Count', 'Amount (ETB)', 'Share %'],
-    ...report.paymentMethods.map((row) => [row.method, row.count, row.amount, row.share]),
-    [],
-    ['BUSIEST HOURS'],
-    ['Hour', 'Orders', 'Paid revenue (ETB)'],
-    ...report.hourly.map((row) => [row.hour, row.orders, row.paidRevenue]),
-    [],
-    ['STAFF PERFORMANCE'],
-    ['Name', 'Role', 'Total orders', 'Completed', 'Cancelled', 'Revenue (ETB)', 'Completion %'],
-    ...report.staff.map((row) => [
-      row.name, row.role, row.totalOrders, row.completedOrders,
-      row.cancelledOrders, row.revenue, row.completionRate
-    ])
+    []
   ];
+
+  if (wantSales || wantItems) {
+    rows.push(
+      ['SUMMARY'],
+      ['Total orders', t.totalOrders],
+      ['Paid orders', t.paidOrders],
+      ['Cancelled orders', t.cancelledOrders],
+      ['Unpaid orders', t.unpaidOrders],
+      ['Paid revenue (ETB)', t.paidRevenue],
+      ['Outstanding revenue (ETB)', t.outstandingRevenue],
+      ['Refunded value (ETB)', t.refundedValue],
+      ['Average order value (ETB)', t.averageOrderValue],
+      ['Average cooking minutes', t.avgCookingMinutes],
+      []
+    );
+  }
+
+  if (wantSales) {
+    rows.push(
+      ['DAILY'],
+      ['Date', 'Orders', 'Paid revenue (ETB)'],
+      ...report.daily.map((row) => [row.date, row.orders, row.paidRevenue]),
+      [],
+      ['PAYMENT METHODS'],
+      ['Method', 'Count', 'Amount (ETB)', 'Share %'],
+      ...report.paymentMethods.map((row) => [row.method, row.count, row.amount, row.share]),
+      [],
+      ['BUSIEST HOURS'],
+      ['Hour', 'Orders', 'Paid revenue (ETB)'],
+      ...report.hourly.map((row) => [row.hour, row.orders, row.paidRevenue]),
+      [],
+      ['ORDER CHANNELS'],
+      ['Channel', 'Count'],
+      ...report.orderChannels.map((row) => [row.channel, row.count]),
+      [],
+      ['ORDER STATUSES'],
+      ['Status', 'Count'],
+      ...report.statusBreakdown.map((row) => [row.status, row.count]),
+      []
+    );
+  }
+
+  if (wantItems) {
+    rows.push(
+      ['TOP ITEMS'],
+      ['Item', 'Quantity', 'Revenue (ETB)'],
+      ...report.topItems.map((row) => [row.name, row.quantity, row.revenue]),
+      [],
+      ['SALES BY CATEGORY'],
+      ['Category', 'Items sold', 'Revenue (ETB)', 'Share %'],
+      ...report.categories.map((row) => [row.category, row.itemsSold, row.revenue, row.share]),
+      []
+    );
+  }
+
+  if (wantStaff) {
+    rows.push(
+      ['STAFF PERFORMANCE'],
+      ['Name', 'Role', 'Total orders', 'Completed', 'Cancelled', 'Revenue (ETB)', 'Completion %'],
+      ...report.staff.map((row) => [
+        row.name, row.role, row.totalOrders, row.completedOrders,
+        row.cancelledOrders, row.revenue, row.completionRate
+      ]),
+      []
+    );
+  }
+
   return rows.map((row) => row.map(csvCell).join(',')).join('\n');
 };
 
@@ -687,94 +770,138 @@ const buildPdf = (report, PDFDocument) => {
   };
 
   // ---------- document ----------
+  //
+  // Sections are gated on `report.section` so a staff-only export never
+  // carries sales tables, and vice versa. When the section is empty the whole
+  // report is rendered.
+
+  const section = report.section || 'all';
+  const wantSales = section === 'all' || section === 'sales';
+  const wantItems = section === 'all' || section === 'items';
+  const wantStaff = section === 'all' || section === 'staff';
 
   drawHeader();
 
-  drawCards([
-    { label: 'Total orders', value: (t.totalOrders || 0).toLocaleString('en-ET'), sub: `${t.paidOrders || 0} paid · ${t.cancelledOrders || 0} cancelled`, color: '#2f6fb5' },
-    { label: 'Paid revenue', value: money(t.paidRevenue), sub: 'Settled payments only', color: '#1f6f5c' },
-    { label: 'Outstanding', value: money(t.outstandingRevenue), sub: `${t.unpaidOrders || 0} unpaid orders`, color: '#c08420' },
-    { label: 'Average order', value: money(t.averageOrderValue), sub: 'Per paid order', color: '#7d7269' },
-    { label: 'Refunded', value: money(t.refundedValue), sub: 'Reversed payments', color: '#b3402a' },
-    { label: 'Avg cooking', value: `${t.avgCookingMinutes || 0} min`, sub: 'Across all chefs', color: '#6b4fa8' }
-  ]);
-
-  drawSectionTitle('Daily revenue', 'Paid revenue per cafe-local day');
-  drawTable(
-    [
-      { key: 'date', label: 'Date', width: 0.4 },
-      { key: 'orders', label: 'Orders', width: 0.3, align: 'right' },
-      { key: 'paidRevenue', label: 'Paid revenue', width: 0.3, align: 'right' }
-    ],
-    report.daily.map((row) => ({ ...row, paidRevenue: money(row.paidRevenue) }))
-  );
-
-  drawSectionTitle('Top selling items', 'Ranked by quantity sold');
-  drawTable(
-    [
-      { key: 'rank', label: '#', width: 0.08, align: 'center' },
-      { key: 'name', label: 'Item', width: 0.46 },
-      { key: 'quantity', label: 'Qty', width: 0.2, align: 'right' },
-      { key: 'revenue', label: 'Revenue', width: 0.26, align: 'right' }
-    ],
-    report.topItems.map((row, index) => ({ ...row, rank: index + 1, revenue: money(row.revenue) }))
-  );
-
-  if (report.categories.length) {
-    drawSectionTitle('Sales by category');
-    drawTable(
-      [
-        { key: 'category', label: 'Category', width: 0.4 },
-        { key: 'itemsSold', label: 'Items', width: 0.2, align: 'right' },
-        { key: 'revenue', label: 'Revenue', width: 0.22, align: 'right' },
-        { key: 'share', label: 'Share', width: 0.18, align: 'right' }
-      ],
-      report.categories.map((row) => ({ ...row, revenue: money(row.revenue), share: `${row.share}%` }))
-    );
+  if (wantSales || wantItems) {
+    drawCards([
+      { label: 'Total orders', value: (t.totalOrders || 0).toLocaleString('en-ET'), sub: `${t.paidOrders || 0} paid · ${t.cancelledOrders || 0} cancelled`, color: '#2f6fb5' },
+      { label: 'Paid revenue', value: money(t.paidRevenue), sub: 'Settled payments only', color: '#1f6f5c' },
+      { label: 'Outstanding', value: money(t.outstandingRevenue), sub: `${t.unpaidOrders || 0} unpaid orders`, color: '#c08420' },
+      { label: 'Average order', value: money(t.averageOrderValue), sub: 'Per paid order', color: '#7d7269' },
+      { label: 'Refunded', value: money(t.refundedValue), sub: 'Reversed payments', color: '#b3402a' },
+      { label: 'Avg cooking', value: `${t.avgCookingMinutes || 0} min`, sub: 'Across all chefs', color: '#6b4fa8' }
+    ]);
   }
 
-  if (report.paymentMethods.length) {
-    drawSectionTitle('Payment methods');
+  if (wantSales) {
+    drawSectionTitle('Daily revenue', 'Paid revenue per cafe-local day');
     drawTable(
       [
-        { key: 'method', label: 'Method', width: 0.34 },
-        { key: 'count', label: 'Payments', width: 0.22, align: 'right' },
-        { key: 'amount', label: 'Amount', width: 0.28, align: 'right' },
-        { key: 'share', label: 'Share', width: 0.16, align: 'right' }
-      ],
-      report.paymentMethods.map((row) => ({ ...row, amount: money(row.amount), share: `${row.share}%` }))
-    );
-  }
-
-  if (report.hourly.length) {
-    drawSectionTitle('Busiest hours', 'Orders and revenue by hour of the day');
-    drawTable(
-      [
-        { key: 'hour', label: 'Hour', width: 0.25 },
+        { key: 'date', label: 'Date', width: 0.4 },
         { key: 'orders', label: 'Orders', width: 0.3, align: 'right' },
-        { key: 'paidRevenue', label: 'Paid revenue', width: 0.45, align: 'right' }
+        { key: 'paidRevenue', label: 'Paid revenue', width: 0.3, align: 'right' }
       ],
-      report.hourly.map((row) => ({ ...row, hour: `${row.hour}:00`, paidRevenue: money(row.paidRevenue) }))
+      report.daily.map((row) => ({ ...row, paidRevenue: money(row.paidRevenue) }))
     );
+
+    if (report.paymentMethods.length) {
+      drawSectionTitle('Payment methods');
+      drawTable(
+        [
+          { key: 'method', label: 'Method', width: 0.34 },
+          { key: 'count', label: 'Payments', width: 0.22, align: 'right' },
+          { key: 'amount', label: 'Amount', width: 0.28, align: 'right' },
+          { key: 'share', label: 'Share', width: 0.16, align: 'right' }
+        ],
+        report.paymentMethods.map((row) => ({ ...row, amount: money(row.amount), share: `${row.share}%` }))
+      );
+    }
+
+    if (report.hourly.length) {
+      drawSectionTitle('Busiest hours', 'Orders and revenue by hour of the day');
+      drawTable(
+        [
+          { key: 'hour', label: 'Hour', width: 0.25 },
+          { key: 'orders', label: 'Orders', width: 0.3, align: 'right' },
+          { key: 'paidRevenue', label: 'Paid revenue', width: 0.45, align: 'right' }
+        ],
+        report.hourly.map((row) => ({ ...row, hour: `${row.hour}:00`, paidRevenue: money(row.paidRevenue) }))
+      );
+    }
+
+    if (report.statusBreakdown.length) {
+      drawSectionTitle('Order statuses');
+      drawTable(
+        [
+          { key: 'status', label: 'Status', width: 0.5 },
+          { key: 'count', label: 'Orders', width: 0.5, align: 'right' }
+        ],
+        report.statusBreakdown.map((row) => ({ ...row, count: (row.count || 0).toLocaleString('en-ET') }))
+      );
+    }
+
+    if (report.orderChannels.length) {
+      drawSectionTitle('Order channels');
+      drawTable(
+        [
+          { key: 'channel', label: 'Channel', width: 0.6 },
+          { key: 'count', label: 'Orders', width: 0.4, align: 'right' }
+        ],
+        report.orderChannels.map((row) => ({ ...row, count: (row.count || 0).toLocaleString('en-ET') }))
+      );
+    }
   }
 
-  if (report.staff.length) {
-    drawSectionTitle('Staff performance', 'Revenue is credited to whoever completed the assigned work');
+  if (wantItems) {
+    drawSectionTitle('Top selling items', 'Ranked by quantity sold');
     drawTable(
       [
-        { key: 'name', label: 'Name', width: 0.28 },
-        { key: 'role', label: 'Role', width: 0.14 },
-        { key: 'totalOrders', label: 'Orders', width: 0.13, align: 'right' },
-        { key: 'completedOrders', label: 'Done', width: 0.11, align: 'right' },
-        { key: 'revenue', label: 'Revenue', width: 0.2, align: 'right' },
-        { key: 'completionRate', label: 'Rate', width: 0.14, align: 'right' }
+        { key: 'rank', label: '#', width: 0.08, align: 'center' },
+        { key: 'name', label: 'Item', width: 0.46 },
+        { key: 'quantity', label: 'Qty', width: 0.2, align: 'right' },
+        { key: 'revenue', label: 'Revenue', width: 0.26, align: 'right' }
       ],
-      report.staff.map((row) => ({
-        ...row,
-        revenue: money(row.revenue),
-        completionRate: `${row.completionRate}%`
-      }))
+      report.topItems.map((row, index) => ({ ...row, rank: index + 1, revenue: money(row.revenue) }))
     );
+
+    if (report.categories.length) {
+      drawSectionTitle('Sales by category');
+      drawTable(
+        [
+          { key: 'category', label: 'Category', width: 0.4 },
+          { key: 'itemsSold', label: 'Items', width: 0.2, align: 'right' },
+          { key: 'revenue', label: 'Revenue', width: 0.22, align: 'right' },
+          { key: 'share', label: 'Share', width: 0.18, align: 'right' }
+        ],
+        report.categories.map((row) => ({ ...row, revenue: money(row.revenue), share: `${row.share}%` }))
+      );
+    }
+  }
+
+  if (wantStaff) {
+    if (report.staff.length) {
+      drawSectionTitle('Staff performance', 'Revenue is credited to whoever completed the assigned work');
+      drawTable(
+        [
+          { key: 'name', label: 'Name', width: 0.28 },
+          { key: 'role', label: 'Role', width: 0.14 },
+          { key: 'totalOrders', label: 'Orders', width: 0.13, align: 'right' },
+          { key: 'completedOrders', label: 'Done', width: 0.11, align: 'right' },
+          { key: 'cancelledOrders', label: 'Cancelled', width: 0.13, align: 'right' },
+          { key: 'revenue', label: 'Revenue', width: 0.15, align: 'right' },
+          { key: 'completionRate', label: 'Rate', width: 0.14, align: 'right' }
+        ],
+        report.staff.map((row) => ({
+          ...row,
+          revenue: money(row.revenue),
+          completionRate: `${row.completionRate}%`
+        }))
+      );
+    } else {
+      doc.fillColor(PDF_COLORS.muted).fontSize(9).font('Helvetica-Oblique')
+        .text('No staff activity in this period.', PDF_MARGIN, doc.y);
+      doc.y += 16;
+    }
   }
 
   // ---------- footer on every page ----------

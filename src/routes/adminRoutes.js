@@ -484,6 +484,11 @@ router.patch('/users/:id/toggle-status', async (req, res) => {
 
 // ========== UNIFIED REPORTS ==========
 // One endpoint replaces /reports/{daily,weekly,monthly,custom} and /reports/export/:type.
+// The optional `section` query param (sales | items | staff) skips the unneeded
+// aggregations, so an export can be focused on just the staff or just the items.
+
+const isValidationError = (message) =>
+  !message || /Invalid date range|Start date must be before/i.test(message);
 
 router.get('/reports/unified', async (req, res) => {
   try {
@@ -491,11 +496,13 @@ router.get('/reports/unified', async (req, res) => {
       start: req.query.start,
       end: req.query.end,
       role: req.query.role,
-      staffId: req.query.staffId
+      staffId: req.query.staffId,
+      section: req.query.section
     });
     res.json({ success: true, data: report });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message || 'Failed to build report' });
+    const status = isValidationError(error.message) ? 400 : 500;
+    res.status(status).json({ success: false, message: error.message || 'Failed to build report' });
   }
 });
 
@@ -509,7 +516,8 @@ router.get('/reports/export', async (req, res) => {
     const report = await getUnifiedReport({
       start: req.query.start,
       end: req.query.end,
-      role: req.query.role
+      role: req.query.role,
+      section: req.query.section
     });
     const filename = `sewrica-report-${report.period.start}-to-${report.period.end}.${format}`;
 
@@ -527,7 +535,8 @@ router.get('/reports/export', async (req, res) => {
     });
     return buildPdf(report, PDFDocument).pipe(res);
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message || 'Failed to export report' });
+    const status = isValidationError(error.message) ? 400 : 500;
+    res.status(status).json({ success: false, message: error.message || 'Failed to export report' });
   }
 });
 
