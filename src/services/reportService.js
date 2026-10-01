@@ -657,25 +657,6 @@ const buildPdf = (report, PDFDocument) => {
     doc.y = 118 + 26;
   };
 
-  const drawSectionTitle = (title, hint) => {
-    if (doc.y > doc.page.height - 160) doc.addPage();
-    doc.moveDown(0.8);
-
-    const y = doc.y;
-    doc.rect(PDF_MARGIN, y, 3, 15).fill(PDF_COLORS.brand);
-    doc.fillColor(PDF_COLORS.ink).fontSize(13).font('Helvetica-Bold')
-      .text(title, PDF_MARGIN + 11, y + 1);
-
-    if (hint) {
-      doc.fillColor(PDF_COLORS.muted).fontSize(8).font('Helvetica')
-        .text(hint, PDF_MARGIN + 11, y + 17);
-    }
-
-    doc.y = y + (hint ? 34 : 24);
-    doc.moveTo(PDF_MARGIN, doc.y - 6).lineTo(right, doc.y - 6).lineWidth(0.5).stroke(PDF_COLORS.line);
-    doc.y += 6;
-  };
-
   // Metric cards laid out in a responsive grid
   const drawCards = (cards) => {
     const gap = 10;
@@ -710,10 +691,14 @@ const buildPdf = (report, PDFDocument) => {
     doc.y += Math.ceil(cards.length / perRow) * 62 + 4;
   };
 
-  /**
-   * columns: [{ key, label, align, width (0-1 share) }]
-   */
-  const drawTable = (columns, rows) => {
+/**
+    * columns: [{ key, label, align, width (0-1 share) }]
+    * Renders a table with a repeating header on every page it spans. The
+    * caller is responsible for drawing the section title first; if a title
+    * would land at the bottom of a page it is moved to the next page so the
+    * table never starts orphaned below a half-empty page.
+    */
+  const drawTable = (columns, rows, { repeatHeader = true } = {}) => {
     if (!rows.length) {
       doc.fillColor(PDF_COLORS.muted).fontSize(9).font('Helvetica-Oblique')
         .text('No data for this period.', PDF_MARGIN, doc.y);
@@ -741,10 +726,10 @@ const buildPdf = (report, PDFDocument) => {
       doc.y += rowHeight;
     };
 
-    renderHead();
+    if (repeatHeader) renderHead();
 
     rows.forEach((row, index) => {
-      if (doc.y > doc.page.height - 90) {
+      if (repeatHeader && doc.y > doc.page.height - 90) {
         doc.addPage();
         renderHead();
       }
@@ -769,6 +754,29 @@ const buildPdf = (report, PDFDocument) => {
     });
 
     doc.y += 10;
+  };
+
+  /** Draw a section title, moving to a new page first if there is not enough
+    * room for the title plus at least one table row below it. This prevents
+    * an orphaned heading sitting alone at the bottom of a page. */
+  const drawSectionTitle = (title, hint) => {
+    const needed = (hint ? 46 : 32) + 24;
+    if (doc.y > doc.page.height - needed) doc.addPage();
+    doc.moveDown(0.8);
+
+    const y = doc.y;
+    doc.rect(PDF_MARGIN, y, 3, 15).fill(PDF_COLORS.brand);
+    doc.fillColor(PDF_COLORS.ink).fontSize(13).font('Helvetica-Bold')
+      .text(title, PDF_MARGIN + 11, y + 1);
+
+    if (hint) {
+      doc.fillColor(PDF_COLORS.muted).fontSize(8).font('Helvetica')
+        .text(hint, PDF_MARGIN + 11, y + 17);
+    }
+
+    doc.y = y + (hint ? 34 : 24);
+    doc.moveTo(PDF_MARGIN, doc.y - 6).lineTo(right, doc.y - 6).lineWidth(0.5).stroke(PDF_COLORS.line);
+    doc.y += 6;
   };
 
   // ---------- document ----------
