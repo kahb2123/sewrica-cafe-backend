@@ -261,24 +261,28 @@ const getStaffPerformance = async (start, end, roleFilter) => {
 // ========== INDIVIDUAL STAFF DETAIL ==========
 
 /**
- * Powers the "view performance" modal on the Staff tab, so it needs no endpoint
- * of its own. Returns the shape that tab already renders.
+ * Full drill-down for one staff member. Attribution follows how the work was
+ * actually assigned:
+ *   chef     -> orders the admin assigned via assignedChef
+ *   delivery -> orders the admin assigned via assignedDelivery
+ *   cashier  -> orders whose payment this person took via processedBy
  */
 const getStaffDetail = async (staffId, start, end) => {
   const range = { createdAt: { $gte: start, $lt: end } };
 
-  const member = await User.findById(staffId, 'name role').lean();
+  const member = await User.findById(staffId, 'name role email phone').lean();
   if (!member) return null;
 
-  const isCook = member.role === 'cook';
-  const isDelivery = member.role === 'delivery';
+  const role = member.role;
+  const assignmentField = role === 'cook'
+    ? 'assignedChef'
+    : role === 'delivery'
+      ? 'assignedDelivery'
+      : 'processedBy';
 
-  const match = {
-    ...range,
-    [isCook ? 'assignedChef' : isDelivery ? 'assignedDelivery' : 'processedBy']: staffId
-  };
+  const match = { ...range, [assignmentField]: staffId };
 
-  const [items, daily] = await Promise.all([
+  const [items, daily, orders, assignedAt] = await Promise.all([
     Order.aggregate([
       { $match: match },
       { $unwind: '$items' },
@@ -292,38 +296,99 @@ const getStaffDetail = async (staffId, start, end) => {
           _id: dayString('createdAt'),
           count: { $sum: 1 },
           totalAmount: { $sum: { $ifNull: ['$totalAmount', 0] } },
-          cookingTime: { $sum: { $ifNull: ['$cookingTime', 0] } }
+          completed: { $sum: { $cond: [{ $in: ['$status', ['ready', 'delivered']] }, 1, 0] } },
+          cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
+          avgCookingMinutes: { $avg: { $cond: [{ $gt: ['$cookingTime', 0] }, '$cookingTime', null] } }
         }
       },
       { $sort: { _id: 1 } }
-    ])
+    ]),
+    Order.find(match)
+      .sort({ createdAt: -1 })
+      .limit(60)
+      .select('orderNumber items status paymentStatus paymentMethod totalAmount createdAt cookingStartedAt cookingCompletedAt cookingTime deliveryCompletedAt assignedAt')
+      .lean(),
+    Order.findOne({ [assignmentField]: staffId })
+      .sort({ createdAt: 1 })
+      .select('createdAt')
+      .lean()
   ]);
 
-  const totalOrders = daily.length ? daily.reduce((sum, row) => sum + row.count, 0) : 0;
+  const totalOrders = orders.length ? daily.reduce((sum, row) => sum + row.count, 0) : 0;
+  const paidOrders = orders.filter((order) => order.paymentStatus === 'completed');
   const totalAmount = daily.reduce((sum, row) => sum + row.totalAmount, 0);
   const totalItemsCooked = items.reduce((sum, row) => sum + row.count, 0);
-  const totalCookingTime = daily.reduce((sum, row) => sum + row.cookingTime, 0);
-  const totalDeliveryTime = daily.reduce((sum, row) => sum + row.cookingTime, 0);
+  const cookingTimes = orders
+    .map((order) => Number(order.cookingTime) || 0)
+    .filter((value) => value > 0);
+  const totalCookingTime = cookingTimes.reduce((sum, value) => sum + value, 0);
+
+  const deliveryMinutes = orders
+    .filter((order) => order.deliveryCompletedAt && order.cookingStartedAt)
+    .map((order) => Math.round((new Date(order.deliveryCompletedAt) - new Date(order.cookingStartedAt)) / 60000))
+    .filter((value) => value > 0);
+  const totalDeliveryTime = deliveryMinutes.reduce((sum, value) => sum + value, 0);
+
+  const completedOrders = orders.filter((order) => ['ready', 'delivered'].includes(order.status)).length;
+  const cancelledOrders = orders.filter((order) => order.status === 'cancelled').length;
+  const unpaidOrders = orders.filter((order) => order.paymentStatus !== 'completed').length;
 
   return {
     staffId: member._id,
     name: member.name,
-    role: member.role,
+    role,
+    email: member.email || '',
+    phone: member.phone || '',
+    firstAssignedAt: assignedAt?.createdAt || null,
     summary: {
       totalOrders,
+      completedOrders,
+      cancelledOrders,
+      unpaidOrders,
+      paidOrders: paidOrders.length,
+      paidRevenue: round2(paidOrders.reduce((sum, order) => sum + (Number(order.totalAmount) || 0), 0)),
+      outstandingRevenue: round2(
+        orders
+          .filter((order) => ['pending', 'processing'].includes(order.paymentStatus))
+          .reduce((sum, order) => sum + (Number(order.totalAmount) || 0), 0)
+      ),
+      completionRate: totalOrders ? Math.round((completedOrders / totalOrders) * 100) : 0,
+      cancellationRate: totalOrders ? Math.round((cancelledOrders / totalOrders) * 100) : 0,
       totalItemsCooked,
       totalCookingTime,
-      averageCookingTime: totalOrders ? Math.round(totalCookingTime / totalOrders) : 0,
-      totalDeliveries: isDelivery ? totalOrders : undefined,
-      totalAmount: isDelivery ? round2(totalAmount) : undefined,
-      totalDeliveryTime: isDelivery ? totalDeliveryTime : undefined,
-      averageDeliveryTime: isDelivery && totalOrders ? Math.round(totalDeliveryTime / totalOrders) : undefined
+      averageCookingTime: cookingTimes.length ? Math.round(totalCookingTime / cookingTimes.length) : 0,
+      slowestCookingTime: cookingTimes.length ? Math.max(...cookingTimes) : 0,
+      totalDeliveries: role === 'delivery' ? totalOrders : undefined,
+      totalAmount: role === 'delivery' ? round2(totalAmount) : undefined,
+      totalDeliveryTime: role === 'delivery' ? totalDeliveryTime : undefined,
+      averageDeliveryTime: deliveryMinutes.length
+        ? Math.round(totalDeliveryTime / deliveryMinutes.length)
+        : undefined
     },
     itemsBreakdown: Object.fromEntries(items.map((row) => [row._id, row.count])),
     dailyBreakdown: Object.fromEntries(daily.map((row) => [row._id, {
       count: row.count,
-      totalAmount: round2(row.totalAmount)
-    }]))
+      completed: row.completed,
+      cancelled: row.cancelled,
+      totalAmount: round2(row.totalAmount),
+      avgCookingMinutes: row.avgCookingMinutes ? Math.round(row.avgCookingMinutes) : null
+    }])),
+    orders: orders.map((order) => ({
+      orderId: order._id,
+      orderNumber: order.orderNumber,
+      status: order.status,
+      paymentStatus: order.paymentStatus,
+      paymentMethod: order.paymentMethod,
+      totalAmount: round2(order.totalAmount),
+      createdAt: order.createdAt,
+      assignedAt: order.assignedAt?.chef || order.assignedAt?.delivery || order.paidAt || order.createdAt,
+      completedAt: order.deliveryCompletedAt || order.cookingCompletedAt || null,
+      cookingTime: Number(order.cookingTime) || 0,
+      items: (order.items || []).map((item) => ({
+        name: item.name || 'Unknown item',
+        quantity: item.quantity
+      }))
+    }))
   };
 };
 
@@ -459,42 +524,273 @@ const buildCsv = (report) => {
   return rows.map((row) => row.map(csvCell).join(',')).join('\n');
 };
 
+// ========== PDF ==========
+
+const PDF_COLORS = {
+  brand: '#1f6f5c',
+  brandDark: '#134a3e',
+  ink: '#1c1917',
+  body: '#3f3a35',
+  muted: '#8a7f76',
+  line: '#e4ddd4',
+  zebra: '#faf7f2',
+  card: '#f4f0e9'
+};
+
+const PDF_MARGIN = 44;
+
+const money = (value) => `${Number(value || 0).toLocaleString('en-ET', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ETB`;
+
+/**
+ * A printable report with a branded header, metric cards, and zebra-striped
+ * tables. Falls back to a new page automatically when a section runs long.
+ */
 const buildPdf = (report, PDFDocument) => {
-  const t = report.totals;
-  const doc = new PDFDocument({ margin: 48 });
-  const money = (value) => `${Number(value || 0).toLocaleString()} ETB`;
+  const doc = new PDFDocument({ size: 'A4', margin: PDF_MARGIN, bufferPages: true });
+  const t = report.totals || {};
+  const contentWidth = doc.page.width - PDF_MARGIN * 2;
+  const right = doc.page.width - PDF_MARGIN;
 
-  doc.fontSize(20).text('Sewrica Cafe Report');
-  doc.fontSize(10).fillColor('#666666')
-    .text(`Period: ${report.period.start} to ${report.period.end} (${report.period.days} days)`);
-  doc.moveDown();
+  // ---------- helpers ----------
 
-  doc.fontSize(14).fillColor('#000').text('Summary');
-  doc.fontSize(10).fillColor('#333333');
-  doc.text(`Total orders: ${t.totalOrders}`);
-  doc.text(`Paid orders: ${t.paidOrders}`);
-  doc.text(`Cancelled orders: ${t.cancelledOrders}`);
-  doc.text(`Unpaid orders: ${t.unpaidOrders}`);
-  doc.text(`Paid revenue: ${money(t.paidRevenue)}`);
-  doc.text(`Outstanding revenue: ${money(t.outstandingRevenue)}`);
-  doc.text(`Refunded value: ${money(t.refundedValue)}`);
-  doc.text(`Average order value: ${money(t.averageOrderValue)}`);
-  doc.text(`Average cooking time: ${t.avgCookingMinutes} min`);
+  const drawHeader = () => {
+    const top = PDF_MARGIN;
+    doc.rect(0, 0, doc.page.width, 118).fill(PDF_COLORS.brand);
 
-  const section = (title, lines) => {
-    if (!lines.length) return;
-    doc.moveDown().fontSize(14).fillColor('#000').text(title);
-    doc.fontSize(10).fillColor('#333333');
-    lines.forEach((line) => doc.text(line));
+    doc.fillColor('#ffffff').fontSize(11).font('Helvetica-Bold')
+      .text('SEWRICA CAFE', PDF_MARGIN, top + 20, { characterSpacing: 2 });
+
+    doc.fontSize(23).font('Helvetica-Bold')
+      .text('Business Report', PDF_MARGIN, top + 36);
+
+    doc.fontSize(10).font('Helvetica').fillColor('#cfe6dd')
+      .text(`${report.period.start}  to  ${report.period.end}   ·   ${report.period.days} days`, PDF_MARGIN, top + 68);
+
+    doc.fontSize(8).font('Helvetica').fillColor('#a9cfc1')
+      .text(`Generated ${new Date().toLocaleString('en-GB')}   ·   Times shown in ${report.period.timezone} (cafe local)`, PDF_MARGIN, top + 88);
+
+    doc.y = 118 + 26;
   };
 
-  section('Top items', report.topItems.map((r) => `${r.name}: ${r.quantity} items, ${money(r.revenue)}`));
-  section('Sales by category', report.categories.map((r) => `${r.category}: ${r.itemsSold} items, ${money(r.revenue)} (${r.share}%)`));
-  section('Payment methods', report.paymentMethods.map((r) => `${r.method}: ${r.count} payments, ${money(r.amount)} (${r.share}%)`));
-  section('Busiest hours', report.hourly.slice(0, 10).map((r) => `${r.hour}:00 - ${r.orders} orders, ${money(r.paidRevenue)}`));
-  section('Staff performance', report.staff.map((r) =>
-    `${r.name} (${r.role}): ${r.totalOrders} orders, ${r.completedOrders} completed, ${money(r.revenue)}, ${r.completionRate}% completion`
-  ));
+  const drawSectionTitle = (title, hint) => {
+    if (doc.y > doc.page.height - 160) doc.addPage();
+    doc.moveDown(0.8);
+
+    const y = doc.y;
+    doc.rect(PDF_MARGIN, y, 3, 15).fill(PDF_COLORS.brand);
+    doc.fillColor(PDF_COLORS.ink).fontSize(13).font('Helvetica-Bold')
+      .text(title, PDF_MARGIN + 11, y + 1);
+
+    if (hint) {
+      doc.fillColor(PDF_COLORS.muted).fontSize(8).font('Helvetica')
+        .text(hint, PDF_MARGIN + 11, y + 17);
+    }
+
+    doc.y = y + (hint ? 34 : 24);
+    doc.moveTo(PDF_MARGIN, doc.y - 6).lineTo(right, doc.y - 6).lineWidth(0.5).stroke(PDF_COLORS.line);
+    doc.y += 6;
+  };
+
+  // Metric cards laid out in a responsive grid
+  const drawCards = (cards) => {
+    const gap = 10;
+    const perRow = 3;
+    const cardWidth = (contentWidth - gap * (perRow - 1)) / perRow;
+
+    cards.forEach((card, index) => {
+      const col = index % perRow;
+      const row = Math.floor(index / perRow);
+
+      if (col === 0 && doc.y > doc.page.height - 150) doc.addPage();
+
+      const x = PDF_MARGIN + col * (cardWidth + gap);
+      const y = doc.y + row * 62;
+      const height = 52;
+
+      doc.roundedRect(x, y, cardWidth, height, 6).fill(PDF_COLORS.card);
+      doc.rect(x, y, 3, height).fill(card.color || PDF_COLORS.brand);
+
+      doc.fillColor(PDF_COLORS.muted).fontSize(7).font('Helvetica-Bold')
+        .text(card.label.toUpperCase(), x + 12, y + 9, { characterSpacing: 0.6, width: cardWidth - 20 });
+
+      doc.fillColor(PDF_COLORS.ink).fontSize(13).font('Helvetica-Bold')
+        .text(card.value, x + 12, y + 22, { width: cardWidth - 20, ellipsis: true });
+
+      if (card.sub) {
+        doc.fillColor(PDF_COLORS.muted).fontSize(7).font('Helvetica')
+          .text(card.sub, x + 12, y + 38, { width: cardWidth - 20, ellipsis: true });
+      }
+    });
+
+    doc.y += Math.ceil(cards.length / perRow) * 62 + 4;
+  };
+
+  /**
+   * columns: [{ key, label, align, width (0-1 share) }]
+   */
+  const drawTable = (columns, rows) => {
+    if (!rows.length) {
+      doc.fillColor(PDF_COLORS.muted).fontSize(9).font('Helvetica-Oblique')
+        .text('No data for this period.', PDF_MARGIN, doc.y);
+      doc.y += 16;
+      return;
+    }
+
+    const rowHeight = 19;
+    const renderHead = () => {
+      if (doc.y > doc.page.height - 120) doc.addPage();
+      doc.rect(PDF_MARGIN, doc.y, contentWidth, rowHeight).fill(PDF_COLORS.brandDark);
+      let x = PDF_MARGIN + 8;
+      doc.fillColor('#ffffff').fontSize(8).font('Helvetica-Bold');
+      columns.forEach((col) => {
+        const w = contentWidth * (col.width || 0.25) - 16;
+        doc.text(col.label.toUpperCase(), x, doc.y + 6, {
+          width: w,
+          align: col.align || 'left',
+          characterSpacing: 0.4,
+          ellipsis: true,
+          lineBreak: false
+        });
+        x += contentWidth * (col.width || 0.25);
+      });
+      doc.y += rowHeight;
+    };
+
+    renderHead();
+
+    rows.forEach((row, index) => {
+      if (doc.y > doc.page.height - 90) {
+        doc.addPage();
+        renderHead();
+      }
+
+      if (index % 2 === 1) doc.rect(PDF_MARGIN, doc.y, contentWidth, rowHeight).fill(PDF_COLORS.zebra);
+
+      let x = PDF_MARGIN + 8;
+      doc.fillColor(PDF_COLORS.body).fontSize(8.5).font('Helvetica');
+      columns.forEach((col) => {
+        const w = contentWidth * (col.width || 0.25) - 16;
+        doc.text(String(row[col.key] ?? '—'), x, doc.y + 6, {
+          width: w,
+          align: col.align || 'left',
+          ellipsis: true,
+          lineBreak: false
+        });
+        x += contentWidth * (col.width || 0.25);
+      });
+
+      doc.y += rowHeight;
+      doc.moveTo(PDF_MARGIN, doc.y).lineTo(right, doc.y).lineWidth(0.4).stroke(PDF_COLORS.line);
+    });
+
+    doc.y += 10;
+  };
+
+  // ---------- document ----------
+
+  drawHeader();
+
+  drawCards([
+    { label: 'Total orders', value: (t.totalOrders || 0).toLocaleString('en-ET'), sub: `${t.paidOrders || 0} paid · ${t.cancelledOrders || 0} cancelled`, color: '#2f6fb5' },
+    { label: 'Paid revenue', value: money(t.paidRevenue), sub: 'Settled payments only', color: '#1f6f5c' },
+    { label: 'Outstanding', value: money(t.outstandingRevenue), sub: `${t.unpaidOrders || 0} unpaid orders`, color: '#c08420' },
+    { label: 'Average order', value: money(t.averageOrderValue), sub: 'Per paid order', color: '#7d7269' },
+    { label: 'Refunded', value: money(t.refundedValue), sub: 'Reversed payments', color: '#b3402a' },
+    { label: 'Avg cooking', value: `${t.avgCookingMinutes || 0} min`, sub: 'Across all chefs', color: '#6b4fa8' }
+  ]);
+
+  drawSectionTitle('Daily revenue', 'Paid revenue per cafe-local day');
+  drawTable(
+    [
+      { key: 'date', label: 'Date', width: 0.4 },
+      { key: 'orders', label: 'Orders', width: 0.3, align: 'right' },
+      { key: 'paidRevenue', label: 'Paid revenue', width: 0.3, align: 'right' }
+    ],
+    report.daily.map((row) => ({ ...row, paidRevenue: money(row.paidRevenue) }))
+  );
+
+  drawSectionTitle('Top selling items', 'Ranked by quantity sold');
+  drawTable(
+    [
+      { key: 'rank', label: '#', width: 0.08, align: 'center' },
+      { key: 'name', label: 'Item', width: 0.46 },
+      { key: 'quantity', label: 'Qty', width: 0.2, align: 'right' },
+      { key: 'revenue', label: 'Revenue', width: 0.26, align: 'right' }
+    ],
+    report.topItems.map((row, index) => ({ ...row, rank: index + 1, revenue: money(row.revenue) }))
+  );
+
+  if (report.categories.length) {
+    drawSectionTitle('Sales by category');
+    drawTable(
+      [
+        { key: 'category', label: 'Category', width: 0.4 },
+        { key: 'itemsSold', label: 'Items', width: 0.2, align: 'right' },
+        { key: 'revenue', label: 'Revenue', width: 0.22, align: 'right' },
+        { key: 'share', label: 'Share', width: 0.18, align: 'right' }
+      ],
+      report.categories.map((row) => ({ ...row, revenue: money(row.revenue), share: `${row.share}%` }))
+    );
+  }
+
+  if (report.paymentMethods.length) {
+    drawSectionTitle('Payment methods');
+    drawTable(
+      [
+        { key: 'method', label: 'Method', width: 0.34 },
+        { key: 'count', label: 'Payments', width: 0.22, align: 'right' },
+        { key: 'amount', label: 'Amount', width: 0.28, align: 'right' },
+        { key: 'share', label: 'Share', width: 0.16, align: 'right' }
+      ],
+      report.paymentMethods.map((row) => ({ ...row, amount: money(row.amount), share: `${row.share}%` }))
+    );
+  }
+
+  if (report.hourly.length) {
+    drawSectionTitle('Busiest hours', 'Orders and revenue by hour of the day');
+    drawTable(
+      [
+        { key: 'hour', label: 'Hour', width: 0.25 },
+        { key: 'orders', label: 'Orders', width: 0.3, align: 'right' },
+        { key: 'paidRevenue', label: 'Paid revenue', width: 0.45, align: 'right' }
+      ],
+      report.hourly.map((row) => ({ ...row, hour: `${row.hour}:00`, paidRevenue: money(row.paidRevenue) }))
+    );
+  }
+
+  if (report.staff.length) {
+    drawSectionTitle('Staff performance', 'Revenue is credited to whoever completed the assigned work');
+    drawTable(
+      [
+        { key: 'name', label: 'Name', width: 0.28 },
+        { key: 'role', label: 'Role', width: 0.14 },
+        { key: 'totalOrders', label: 'Orders', width: 0.13, align: 'right' },
+        { key: 'completedOrders', label: 'Done', width: 0.11, align: 'right' },
+        { key: 'revenue', label: 'Revenue', width: 0.2, align: 'right' },
+        { key: 'completionRate', label: 'Rate', width: 0.14, align: 'right' }
+      ],
+      report.staff.map((row) => ({
+        ...row,
+        revenue: money(row.revenue),
+        completionRate: `${row.completionRate}%`
+      }))
+    );
+  }
+
+  // ---------- footer on every page ----------
+  const range = doc.bufferedPageRange();
+  for (let i = 0; i < range.count; i++) {
+    doc.switchToPage(range.start + i);
+    const y = doc.page.height - 34;
+
+    doc.moveTo(PDF_MARGIN, y - 6).lineTo(right, y - 6).lineWidth(0.5).stroke(PDF_COLORS.line);
+    doc.fillColor(PDF_COLORS.muted).fontSize(7.5).font('Helvetica')
+      .text('Sewrica Cafe · Confidential', PDF_MARGIN, y, { width: contentWidth / 2 });
+    doc.text(`Page ${i + 1} of ${range.count}`, PDF_MARGIN + contentWidth / 2, y, {
+      width: contentWidth / 2,
+      align: 'right'
+    });
+  }
 
   doc.end();
   return doc;
