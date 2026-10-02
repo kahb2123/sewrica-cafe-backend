@@ -603,18 +603,15 @@ router.get('/reports/staff-performance', async (req, res) => {
       Order.aggregate([
         { $match: match },
         { $group: {
-          _id: {
-            staff: '$processedBy',
-            role: { $first: '$processedByRole' }
-          },
+          _id: '$processedBy',
           totalOrders: { $sum: 1 },
           totalRevenue: { $sum: '$totalAmount' },
         }},
-        { $lookup: { from: 'users', localField: '_id.staff', foreignField: '_id', as: 'user' } },
+        { $lookup: { from: 'users', localField: '_id', foreignField: '_id', as: 'user' } },
         { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
         { $project: {
           _id: 0,
-          staffId: '$_id.staff',
+          staffId: '$_id',
           name: '$user.name',
           role: '$user.role',
           totalOrders: 1,
@@ -677,6 +674,175 @@ router.get('/reports/item-performance', async (req, res) => {
   } catch (error) {
     console.error('Item performance report error:', error);
     res.status(500).json({ success: false, message: 'Failed to build item performance report' });
+  }
+});
+
+// @desc    Export staff or item performance report as CSV or PDF
+// @route   GET /api/admin/reports/export
+router.get('/reports/export', async (req, res) => {
+  try {
+    const { format = 'csv', type = 'staff', start, end, staffId } = req.query;
+    const range = {};
+    if (start) range.$gte = new Date(start);
+    if (end) {
+      range.$lte = new Date(end);
+      range.$lte.setHours(23, 59, 59, 999);
+    }
+
+    const dateFilter = Object.keys(range).length ? { createdAt: range } : {};
+    let rows = [];
+
+    if (type === 'items') {
+      rows = await Order.aggregate([
+        { $match: dateFilter },
+        { $unwind: '$items' },
+        { $group: {
+          _id: '$items.menuItem',
+          name: { $first: '$items.name' },
+          category: { $first: '$items.category' },
+          unitsSold: { $sum: '$items.quantity' },
+          totalRevenue: { $sum: { $multiply: ['$items.price', '$items.quantity'] } },
+          orderCount: { $sum: 1 }
+        }},
+        { $sort: { totalRevenue: -1 } }
+      ]);
+    } else {
+      const match = staffId ? { ...dateFilter, processedBy: require('mongoose').Types.ObjectId(staffId) } : dateFilter;
+      rows = await Order.aggregate([
+        { $match: match },
+        { $group: {
+          _id: '$processedBy',
+          totalOrders: { $sum: 1 },
+          totalRevenue: { $sum: '$totalAmount' }
+        }},
+        { $lookup: { from: 'users', localField: '_id', foreignField: '_id', as: 'user' } },
+        { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+        { $project: {
+          _id: 0,
+          staffId: '$_id',
+          name: '$user.name',
+          role: '$user.role',
+          totalOrders: 1,
+          totalRevenue: { $round: ['$totalRevenue', 2] }
+        }},
+        { $sort: { totalRevenue: -1 } }
+      ]);
+    }
+
+    if (format === 'csv') {
+      const headers = type === 'items'
+        ? ['Menu Item', 'Category', 'Units Sold', 'Revenue (ETB)', 'Orders']
+        : ['Name', 'Role', 'Orders Handled', 'Revenue (ETB)'];
+      const csvRows = [
+        headers.join(','),
+        ...rows.map((row) => {
+          const values = type === 'items'
+            ? [row.name, row.category || 'N/A', row.unitsSold, Number(row.totalRevenue).toFixed(2), row.orderCount]
+            : [row.name || 'Unassigned', row.role || 'N/A', row.totalOrders, Number(row.totalRevenue).toFixed(2)];
+          return values.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',');
+        })
+      ];
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="sewrica-report-${type}-${start || 'start'}-to-${end || 'end'}.csv"`);
+      return res.send(csvRows.join('\n'));
+    }
+
+    if (format === 'pdf') {
+      const PDFDocument = require('pdfkit');
+      const doc = new PDFDocument({ margin: 50 });
+      const filename = `sewrica-report-${type}-${start || 'start'}-to-${end || 'end'}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      doc.fontSize(18).text('Sewrica Cafe - Report');
+      doc.fontSize(12).text(`${type === 'items' ? 'Item Performance' : 'Staff Performance'} Report`, { paragraphGap: 10 });
+      doc.text(`Period: ${start || 'All time'} to ${end || 'Present'}`);
+      doc.moveDown();
+      doc.fontSize(10);
+      if (type === 'items') {
+        doc.text('Menu Item | Category | Units Sold | Revenue (ETB) | Orders');
+        rows.forEach((row) => {
+          doc.text(`${row.name} | ${row.category || 'N/A'} | ${row.unitsSold} | ${Number(row.totalRevenue).toFixed(2)} | ${row.orderCount}`);
+        });
+      } else {
+        doc.text('Name | Role | Orders Handled | Revenue (ETB)');
+        rows.forEach((row) => {
+          doc.text(`${row.name || 'Unassigned'} | ${row.role || 'N/A'} | ${row.totalOrders} | ${Number(row.totalRevenue).toFixed(2)}`);
+        });
+      }
+      doc.pipe(res);
+      doc.end();
+      return;
+    }
+
+    res.status(400).json({ success: false, message: 'Format must be csv or pdf' });
+  } catch (error) {
+    console.error('Export report error:', error);
+    res.status(500).json({ success: false, message: 'Failed to export report' });
+  }
+});
+
+// @desc    Staff detail report with item breakdown
+// @route   GET /api/admin/reports/staff/:staffId
+router.get('/reports/staff/:staffId', async (req, res) => {
+  try {
+    const { staffId } = req.params;
+    const range = {};
+    if (req.query.start) range.$gte = new Date(req.query.start);
+    if (req.query.end) {
+      range.$lte = new Date(req.query.end);
+      range.$lte.setHours(23, 59, 59, 999);
+    }
+
+    const match = Object.keys(range).length ? { createdAt: range } : {};
+
+    const [staffInfo, orders, items] = await Promise.all([
+      User.findById(staffId, 'name role email phone').lean(),
+      Order.find({ ...match, processedBy: require('mongoose').Types.ObjectId(staffId) })
+        .select('orderNumber status paymentStatus totalAmount items createdAt')
+        .lean(),
+      Order.aggregate([
+        { $match: { ...match, processedBy: require('mongoose').Types.ObjectId(staffId) } },
+        { $unwind: '$items' },
+        { $group: {
+          _id: { $ifNull: ['$items.name', 'Unknown item'] },
+          quantity: { $sum: '$items.quantity' },
+          revenue: { $sum: { $multiply: ['$items.price', '$items.quantity'] } }
+        }},
+        { $sort: { quantity: -1 } }
+      ])
+    ]);
+
+    if (!staffInfo) {
+      return res.status(404).json({ success: false, message: 'Staff member not found' });
+    }
+
+    const detail = {
+      staffId: staffInfo._id,
+      name: staffInfo.name,
+      role: staffInfo.role,
+      email: staffInfo.email || '',
+      phone: staffInfo.phone || '',
+      summary: {
+        totalOrders: orders.length,
+        totalRevenue: Number(orders.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0)).toFixed(2),
+        avgOrderValue: orders.length ? Number(orders.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0) / orders.length).toFixed(2) : '0.00'
+      },
+      itemsBreakdown: Object.fromEntries(items.map((row) => [row._id, row.quantity])),
+      recentOrders: orders.slice(0, 20).map((order) => ({
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        status: order.status,
+        paymentStatus: order.paymentStatus,
+        totalAmount: Number(order.totalAmount || 0).toFixed(2),
+        itemCount: order.items?.length || 0,
+        createdAt: order.createdAt
+      }))
+    };
+
+    res.json({ success: true, data: { staffDetail: detail } });
+  } catch (error) {
+    console.error('Staff detail report error:', error);
+    res.status(500).json({ success: false, message: 'Failed to build staff detail report' });
   }
 });
 
