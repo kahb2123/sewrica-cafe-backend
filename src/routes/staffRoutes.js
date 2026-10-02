@@ -763,10 +763,57 @@ router.post('/orders/:orderId/assign-chef',
         io.to(`order-${order._id}`).emit('order-updated', { orderId: order._id, assignedChef: chefId, status: 'confirmed' });
       }
 
-      res.json({ success: true, message: 'Chef assigned', order });
+      const updated = await Order.findById(orderId)
+        .populate('assignedChef', 'name')
+        .populate('assignedDelivery', 'name');
+
+      res.json({ success: true, message: 'Chef assigned', order: updated });
     } catch (error) {
       console.error('Assign chef error:', error);
       res.status(500).json({ message: 'Failed to assign chef' });
+    }
+  }
+);
+
+// @desc    Assign or reassign delivery person to order (for kitchen display)
+// @route   POST /api/staff/orders/:orderId/assign-delivery
+// @access  Private (cook, chef, admin)
+router.post('/orders/:orderId/assign-delivery',
+  requirePermission(PERMISSIONS.ORDERS_ASSIGN_DELIVERY),
+  async (req, res) => {
+    try {
+      const { orderId } = req.params;
+      const { deliveryId } = req.body;
+
+      const order = await Order.findById(orderId);
+      if (!order) {
+        return res.status(404).json({ success: false, message: 'Order not found' });
+      }
+
+      const delivery = await User.findOne({ _id: deliveryId, role: 'delivery', isActive: true });
+      if (!delivery) {
+        return res.status(400).json({ success: false, message: 'Delivery person not found or not available' });
+      }
+
+      order.assignedDelivery = deliveryId;
+      if (!order.assignedAt) order.assignedAt = {};
+      order.assignedAt.delivery = new Date();
+
+      await order.save();
+
+      const io = require('../services/socketService');
+      if (io) {
+        io.to(`order-${order._id}`).emit('order-updated', { orderId: order._id, assignedDelivery: deliveryId });
+      }
+
+      const updated = await Order.findById(orderId)
+        .populate('assignedChef', 'name')
+        .populate('assignedDelivery', 'name');
+
+      res.json({ success: true, message: 'Delivery person assigned', order: updated });
+    } catch (error) {
+      console.error('Assign delivery error:', error);
+      res.status(500).json({ message: 'Failed to assign delivery person' });
     }
   }
 );
