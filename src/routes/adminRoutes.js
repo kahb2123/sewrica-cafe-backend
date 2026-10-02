@@ -586,4 +586,98 @@ router.get('/reports/export', async (req, res) => {
   }
 });
 
+// @desc    Staff performance report — revenue and orders per staff member
+// @route   GET /api/admin/reports/staff-performance
+router.get('/reports/staff-performance', async (req, res) => {
+  try {
+    const range = {};
+    if (req.query.start) range.$gte = new Date(req.query.start);
+    if (req.query.end) {
+      range.$lte = new Date(req.query.end);
+      range.$lte.setHours(23, 59, 59, 999);
+    }
+
+    const match = { ...(Object.keys(range).length ? { createdAt: range } : {}) };
+
+    const [staffData, allStaff] = await Promise.all([
+      Order.aggregate([
+        { $match: match },
+        { $group: {
+          _id: {
+            staff: '$processedBy',
+            role: { $first: '$processedByRole' }
+          },
+          totalOrders: { $sum: 1 },
+          totalRevenue: { $sum: '$totalAmount' },
+        }},
+        { $lookup: { from: 'users', localField: '_id.staff', foreignField: '_id', as: 'user' } },
+        { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+        { $project: {
+          _id: 0,
+          staffId: '$_id.staff',
+          name: '$user.name',
+          role: '$user.role',
+          totalOrders: 1,
+          totalRevenue: { $round: ['$totalRevenue', 2] }
+        }},
+        { $sort: { totalRevenue: -1 } }
+      ]),
+      User.find({ isActive: true, role: { $in: ['cook', 'delivery', 'cashier'] } }).lean()
+    ]);
+
+    res.json({ success: true, data: { staff: staffData, allStaff } });
+  } catch (error) {
+    console.error('Staff performance report error:', error);
+    res.status(500).json({ success: false, message: 'Failed to build staff performance report' });
+  }
+});
+
+// @desc    Item performance report — units sold and revenue per menu item
+// @route   GET /api/admin/reports/item-performance
+router.get('/reports/item-performance', async (req, res) => {
+  try {
+    const range = {};
+    if (req.query.start) range.$gte = new Date(req.query.start);
+    if (req.query.end) {
+      range.$lte = new Date(req.query.end);
+      range.$lte.setHours(23, 59, 59, 999);
+    }
+
+    const match = { ...(Object.keys(range).length ? { createdAt: range } : {}) };
+
+    const pipeline = [
+      { $match: match },
+      { $unwind: '$items' },
+      { $group: {
+        _id: '$items.menuItem',
+        name: { $first: '$items.name' },
+        category: { $first: '$items.category' },
+        unitsSold: { $sum: '$items.quantity' },
+        totalRevenue: { $sum: { $multiply: ['$items.price', '$items.quantity'] } },
+        orderCount: { $sum: 1 },
+      }},
+      { $lookup: { from: 'menuitems', localField: '_id', foreignField: '_id', as: 'menuItem' } },
+      { $unwind: { path: '$menuItem', preserveNullAndEmptyArrays: true } },
+      { $project: {
+        _id: 1,
+        name: 1,
+        category: 1,
+        unitsSold: 1,
+        totalRevenue: { $round: ['$totalRevenue', 2] },
+        orderCount: 1,
+        currentStock: '$menuItem.stockQuantity',
+        isAvailable: '$menuItem.isAvailable',
+        image: '$menuItem.image',
+      }},
+      { $sort: { totalRevenue: -1 } }
+    ];
+
+    const items = await Order.aggregate(pipeline);
+    res.json({ success: true, data: { items } });
+  } catch (error) {
+    console.error('Item performance report error:', error);
+    res.status(500).json({ success: false, message: 'Failed to build item performance report' });
+  }
+});
+
 module.exports = router;
