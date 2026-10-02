@@ -857,23 +857,22 @@ router.get('/reports/staff/:staffId', async (req, res) => {
 
     const staffObjId = mongoose.Types.ObjectId(staffId);
     const dateMatch = Object.keys(range).length ? { createdAt: range } : {};
-    const staffFilter = {
-      $or: [
-        { processedBy: staffObjId },
-        { assignedChef: staffObjId },
-        { assignedDelivery: staffObjId }
-      ]
-    };
-    const fullFilter = { ...dateMatch, ...staffFilter };
 
     let staffInfo = null, orders = [], items = [];
     try {
       [staffInfo, orders] = await Promise.all([
         User.findById(staffId, 'name role email phone').lean(),
-        Order.find(fullFilter).select('orderNumber status paymentStatus totalAmount items createdAt').lean()
+        Order.find({
+          ...dateMatch,
+          $or: [
+            { processedBy: staffObjId },
+            { assignedChef: staffObjId },
+            { assignedDelivery: staffObjId }
+          ]
+        }).select('orderNumber status paymentStatus totalAmount items createdAt').lean()
       ]);
     } catch (queryError) {
-      console.error('Staff detail query error:', queryError.message, queryError.stack);
+      console.error('Staff detail query error:', queryError);
       throw queryError;
     }
 
@@ -927,7 +926,7 @@ router.get('/reports/staff/:staffId', async (req, res) => {
     res.json({ success: true, data: { staffDetail: detail } });
   } catch (error) {
     console.error('Staff detail report error:', error.message, error.stack);
-    res.status(500).json({ success: false, message: 'Failed to build staff detail report' });
+    res.status(500).json({ success: false, message: 'Failed to build staff detail report', error: error.message });
   }
 });
 
