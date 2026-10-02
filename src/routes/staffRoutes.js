@@ -758,7 +758,7 @@ router.post('/orders/:orderId/assign-chef',
       order.status = 'confirmed';
       await order.save();
 
-      const io = require('../services/socketService');
+      const io = req.app.get('io');
       if (io) {
         io.to(`order-${order._id}`).emit('order-updated', { orderId: order._id, assignedChef: chefId, status: 'confirmed' });
       }
@@ -801,7 +801,7 @@ router.post('/orders/:orderId/assign-delivery',
 
       await order.save();
 
-      const io = require('../services/socketService');
+      const io = req.app.get('io');
       if (io) {
         io.to(`order-${order._id}`).emit('order-updated', { orderId: order._id, assignedDelivery: deliveryId });
       }
