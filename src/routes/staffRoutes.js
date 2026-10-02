@@ -709,4 +709,67 @@ router.get('/stats/delivery',
     }
   });
 
+// ========== KITCHEN DISPLAY ENDPOINTS ==========
+
+// @desc    Get all orders in the kitchen queue (for kitchen display)
+// @route   GET /api/staff/orders/kitchen
+// @access  Private (cook, chef, admin)
+router.get('/orders/kitchen',
+  requirePermission(PERMISSIONS.ORDERS_VIEW),
+  async (req, res) => {
+    try {
+      const QUEUE_STATUSES = ['pending', 'confirmed', 'preparing', 'cooking'];
+      const orders = await Order.find({
+        status: { $in: QUEUE_STATUSES },
+      })
+        .sort({ createdAt: 1 })
+        .populate('assignedChef', 'name')
+        .populate('assignedDelivery', 'name')
+        .populate('items.menuItem');
+
+      res.json(orders || []);
+    } catch (error) {
+      console.error('Kitchen orders fetch error:', error);
+      res.status(500).json({ message: 'Failed to fetch kitchen orders' });
+    }
+  }
+);
+
+// @desc    Assign chef to order (for kitchen display)
+// @route   POST /api/staff/orders/:orderId/assign-chef
+// @access  Private (cook, chef, admin)
+router.post('/orders/:orderId/assign-chef',
+  requirePermission(PERMISSIONS.ORDERS_ASSIGN_CHEF),
+  async (req, res) => {
+    try {
+      const { orderId } = req.params;
+      const { chefId } = req.body;
+
+      const order = await Order.findById(orderId);
+      if (!order) {
+        return res.status(404).json({ success: false, message: 'Order not found' });
+      }
+
+      if (order.assignedChef && order.assignedChef.toString() !== chefId) {
+        return res.status(400).json({ success: false, message: 'Order already has an assigned chef' });
+      }
+
+      order.assignedChef = chefId;
+      order.status = 'confirmed';
+      await order.save();
+
+      const io = require('../services/socketService');
+      if (io) {
+        io.to(`order-${order._id}`).emit('order-updated', { orderId: order._id, assignedChef: chefId, status: 'confirmed' });
+      }
+
+      res.json({ success: true, message: 'Chef assigned', order });
+    } catch (error) {
+      console.error('Assign chef error:', error);
+      res.status(500).json({ message: 'Failed to assign chef' });
+    }
+  }
+);
+
 module.exports = router;
+
