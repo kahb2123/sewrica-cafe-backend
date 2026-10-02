@@ -94,10 +94,12 @@ const createOrder = async (req, res) => {
 
     // Create order with initial status, retrying if the 5-digit number is already taken
     let order;
+    let currentOrderNumber;
     for (let attempt = 0; attempt < ORDER_NUMBER_MAX_ATTEMPTS; attempt++) {
       try {
+        currentOrderNumber = await generateOrderNumber();
         order = await Order.create({
-        orderNumber: generateOrderNumber(),
+          orderNumber: currentOrderNumber,
         customer: user._id,
         customerName: customerInfo.name,
         customerPhone: customerInfo.phone,
@@ -796,12 +798,12 @@ const refundPayment = async (req, res) => {
 };
 
 // Helper function to generate a unique 5-digit order number
-const ORDER_NUMBER_LENGTH = 5;
+const ORDER_NUMBER_LENGTH = 4;
 const ORDER_NUMBER_MAX_ATTEMPTS = 25;
 
-const generateOrderNumber = () => {
-  const max = 10 ** ORDER_NUMBER_LENGTH;
-  return crypto.randomInt(0, max).toString().padStart(ORDER_NUMBER_LENGTH, '0');
+const generateOrderNumber = async () => {
+  const count = await Order.countDocuments({});
+  return String(count).padStart(ORDER_NUMBER_LENGTH, '0');
 };
 
 // Export all functions

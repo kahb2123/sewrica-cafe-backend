@@ -221,12 +221,7 @@ router.post('/orders/:orderId/assign-chef', async (req, res) => {
       });
     }
 
-    if (order.assignedChef) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Order already has an assigned chef' 
-      });
-    }
+    const isReassignment = order.assignedChef && order.assignedChef.toString() !== chefId;
 
     order.assignedChef = chefId;
     if (!order.assignedAt) order.assignedAt = {};
@@ -239,7 +234,7 @@ router.post('/orders/:orderId/assign-chef', async (req, res) => {
       status: 'confirmed',
       changedBy: req.user._id,
       changedAt: new Date(),
-      notes: `Assigned to chef: ${chef.name}${notes ? ` (${notes})` : ''}`
+       notes: `Assigned to chef: ${chef.name}${notes ? ` (${notes})` : ''}${isReassignment ? ' (Reassigned)' : ''}`
     });
 
     await order.save();
@@ -307,19 +302,11 @@ router.post('/orders/:orderId/assign-delivery', async (req, res) => {
       });
     }
 
-    if (order.assignedDelivery) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Order already has an assigned delivery person' 
-      });
+    if (order.assignedDelivery && order.assignedDelivery.toString() !== deliveryId) {
+      // Reassignment allowed for admin
     }
 
-    if (order.status !== 'ready') {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Order must be ready before assigning delivery' 
-      });
-    }
+    const isReassignment = order.assignedDelivery && order.assignedDelivery.toString() !== deliveryId;
 
     order.assignedDelivery = deliveryId;
     if (!order.assignedAt) order.assignedAt = {};
@@ -331,7 +318,7 @@ router.post('/orders/:orderId/assign-delivery', async (req, res) => {
       status: 'ready',
       changedBy: req.user._id,
       changedAt: new Date(),
-      notes: `Assigned to delivery: ${delivery.name}${notes ? ` (${notes})` : ''}`
+       notes: `Assigned to delivery: ${delivery.name}${notes ? ` (${notes})` : ''}${isReassignment ? ' (Reassigned)' : ''}`
     });
 
     await order.save();
