@@ -2,13 +2,14 @@ const express = require('express');
 const router = express.Router();
 const Ingredient = require('../models/Ingredient');
 const IngredientWithdrawal = require('../models/IngredientWithdrawal');
-const { protect, authorize } = require('../middleware/authMiddleware');
+const { protect } = require('../middleware/authMiddleware');
+const { requirePagePermission } = require('../middleware/roleMiddleware');
 
-router.use(protect, authorize('admin', 'supply_chain'));
+router.use(protect);
 
 const isNonNegativeNumber = (value) => Number.isFinite(Number(value)) && Number(value) >= 0;
 
-router.get('/', async (req, res) => {
+router.get('/', requirePagePermission('adminIngredients', 'read'), async (req, res) => {
   try {
     const ingredients = await Ingredient.find().sort({ name: 1 });
     res.json({ success: true, data: ingredients });
@@ -17,7 +18,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-router.post('/', async (req, res) => {
+router.post('/', requirePagePermission('adminIngredients', 'write'), async (req, res) => {
   try {
     const { name, unit, quantity = 0, unitPrice = 0, reorderLevel = 0, supplier = '' } = req.body;
     if (!name || !unit || !isNonNegativeNumber(quantity) || !isNonNegativeNumber(unitPrice) || !isNonNegativeNumber(reorderLevel)) {
@@ -42,7 +43,7 @@ router.post('/', async (req, res) => {
 // The availability check lives in the query filter so MongoDB applies it and the
 // decrement in one atomic step. Two concurrent withdrawals cannot overdraw stock.
 
-router.get('/withdrawals', async (req, res) => {
+router.get('/withdrawals', requirePagePermission('adminIngredients', 'read'), async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 50, 200);
     const withdrawals = await IngredientWithdrawal.find().sort({ createdAt: -1 }).limit(limit);
@@ -52,7 +53,7 @@ router.get('/withdrawals', async (req, res) => {
   }
 });
 
-router.post('/withdrawals', async (req, res) => {
+router.post('/withdrawals', requirePagePermission('adminIngredients', 'write'), async (req, res) => {
   try {
     const { ingredientId } = req.body;
     const quantity = Number(req.body.quantity);
@@ -106,7 +107,7 @@ router.post('/withdrawals', async (req, res) => {
   }
 });
 
-router.post('/:id/purchases', async (req, res) => {
+router.post('/:id/purchases', requirePagePermission('adminIngredients', 'write'), async (req, res) => {
   try {
     const quantity = Number(req.body.quantity);
     const unitCost = Number(req.body.unitCost || 0);
@@ -130,7 +131,7 @@ router.post('/:id/purchases', async (req, res) => {
   }
 });
 
-router.patch('/:id', async (req, res) => {
+router.patch('/:id', requirePagePermission('adminIngredients', 'write'), async (req, res) => {
   try {
     const updates = {};
     if (req.body.name !== undefined) updates.name = req.body.name;

@@ -1,16 +1,17 @@
 const express = require('express');
 const router = express.Router();
 const Expense = require('../models/Expense');
-const { protect, authorize } = require('../middleware/authMiddleware');
+const { protect } = require('../middleware/authMiddleware');
+const { requirePagePermission } = require('../middleware/roleMiddleware');
 
-router.use(protect, authorize('admin', 'supply_chain'));
+router.use(protect);
 
 const isNonNegativeNumber = (value) => Number.isFinite(Number(value)) && Number(value) >= 0;
 
 const VALID_CATEGORIES = ['ingredients', 'utilities', 'rent', 'marketing', 'staff', 'maintenance', 'supplies', 'other'];
 const VALID_PAYMENT_METHODS = ['cash', 'card', 'bank_transfer', 'mobile_money'];
 
-router.get('/', async (req, res) => {
+router.get('/', requirePagePermission('adminExpenses', 'read'), async (req, res) => {
   try {
     const { start, end, category, approved, page = 1, limit = 50 } = req.query;
     const query = {};
@@ -55,7 +56,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-router.get('/stats', async (req, res) => {
+router.get('/stats', requirePagePermission('adminExpenses', 'read'), async (req, res) => {
   try {
     const { start, end } = req.query;
     const match = {};
@@ -96,7 +97,7 @@ router.get('/stats', async (req, res) => {
   }
 });
 
-router.post('/', async (req, res) => {
+router.post('/', requirePagePermission('adminExpenses', 'write'), async (req, res) => {
   try {
     const { category, description, amount, currency, paymentMethod, supplier, receiptNumber, expenseDate, notes } = req.body;
 
@@ -135,7 +136,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.patch('/:id', async (req, res) => {
+router.patch('/:id', requirePagePermission('adminExpenses', 'write'), async (req, res) => {
   try {
     const { category, description, amount, currency, paymentMethod, supplier, receiptNumber, expenseDate, notes } = req.body;
 
@@ -186,7 +187,7 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
-router.patch('/:id/approve', async (req, res) => {
+router.patch('/:id/approve', requirePagePermission('adminExpenses', 'write'), async (req, res) => {
   try {
     const expense = await Expense.findByIdAndUpdate(
       req.params.id,
@@ -205,7 +206,7 @@ router.patch('/:id/approve', async (req, res) => {
   }
 });
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requirePagePermission('adminExpenses', 'write'), async (req, res) => {
   try {
     const expense = await Expense.findByIdAndDelete(req.params.id);
     if (!expense) {

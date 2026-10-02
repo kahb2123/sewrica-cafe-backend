@@ -3,8 +3,10 @@ const {
   hasRole,
   hasRoleOrHigher,
   getPermissionsForRole,
+  getPageAccessForRole,
   routePermissions,
   roleHierarchy,
+  PAGE_ACCESS,
 } = require('../config/roleMap');
 
 const requirePermission = (...permissions) => {
@@ -113,7 +115,7 @@ const getRoutePermissions = (method, path) => {
 const requireRoutePermission = () => {
   return (req, res, next) => {
     if (!req.user) {
-      return res.status(401).json({ message: 'Not authorized, no user' });
+      return res.status(401).json({ message: 'Not authorized' });
     }
 
     const userRole = req.user.role;
@@ -131,6 +133,63 @@ const requireRoutePermission = () => {
       }
     }
 
+    next();
+  };
+};
+
+const mergePageAccessForUser = (user) => {
+  const role = user.role;
+  const base = getPageAccessForRole(role);
+  const overrides = (user.pageAccessOverrides && typeof user.pageAccessOverrides === 'object') ? user.pageAccessOverrides : {};
+
+  const merged = {};
+  for (const [page, access] of Object.entries(PAGE_ACCESS)) {
+    const override = overrides[page];
+    if (override) {
+      merged[page] = {
+        canRead: !!override.canRead,
+        canWrite: !!override.canWrite,
+      };
+    } else {
+      merged[page] = {
+        canRead: !!access.read.includes(role),
+        canWrite: !!access.write.includes(role),
+      };
+    }
+  }
+  return merged;
+};
+
+const getUserPageAccess = (req) => {
+  if (req.user && req.user.pageAccessOverrides) {
+    return mergePageAccessForUser(req.user);
+  }
+  if (req.user) {
+    return mergePageAccessForUser(req.user);
+  }
+  return getPageAccessForRole(null);
+};
+
+const requirePagePermission = (page, action = 'read') => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ message: 'Not authorized' });
+    }
+
+    const pageAccess = getUserPageAccess(req);
+    const pagePerm = pageAccess[page];
+
+    if (!pagePerm) {
+      return res.status(403).json({ message: `Access denied. Page '${page}' not found` });
+    }
+
+    if (action === 'write' && !pagePerm.canWrite) {
+      return res.status(403).json({ message: `Access denied. Write permission required for '${page}'` });
+    }
+
+    if (action === 'read' && !pagePerm.canRead) {
+      return res.status(403).json({ message: `Access denied. Read permission required for '${page}'` });
+    }
     next();
   };
 };
@@ -173,6 +232,8 @@ module.exports = {
   requireRole,
   requireRoleOrHigher,
   requireRoutePermission,
+  requirePagePermission,
+  getUserPageAccess,
   getUserPermissions,
   roleMiddleware,
   getRoutePermissions,
