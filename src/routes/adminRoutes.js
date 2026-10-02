@@ -793,20 +793,26 @@ router.get('/reports/staff/:staffId', async (req, res) => {
       range.$lte.setHours(23, 59, 59, 999);
     }
 
+    const mongoose = require('mongoose');
+    const { isValidObjectId } = mongoose;
+
+    if (!isValidObjectId(staffId)) {
+      return res.status(400).json({ success: false, message: 'Invalid staff ID' });
+    }
+
+    const processedBy = mongoose.Types.ObjectId(staffId);
     const match = Object.keys(range).length ? { createdAt: range } : {};
 
     const [staffInfo, orders, items] = await Promise.all([
       User.findById(staffId, 'name role email phone').lean(),
-      Order.find({ ...match, processedBy: require('mongoose').Types.ObjectId(staffId) })
-        .select('orderNumber status paymentStatus totalAmount items createdAt')
-        .lean(),
+      Order.find({ ...match, processedBy }).select('orderNumber status paymentStatus totalAmount items createdAt').lean(),
       Order.aggregate([
-        { $match: { ...match, processedBy: require('mongoose').Types.ObjectId(staffId) } },
-        { $unwind: '$items' },
+        { $match: { ...match, processedBy } },
+        { $unwind: { path: '$items', preserveNullAndEmptyArrays: true } },
         { $group: {
           _id: { $ifNull: ['$items.name', 'Unknown item'] },
-          quantity: { $sum: '$items.quantity' },
-          revenue: { $sum: { $multiply: ['$items.price', '$items.quantity'] } }
+          quantity: { $sum: { $ifNull: ['$items.quantity', 0] } },
+          revenue: { $sum: { $multiply: [{ $ifNull: ['$items.price', 0] }, { $ifNull: ['$items.quantity', 0] }] } }
         }},
         { $sort: { quantity: -1 } }
       ])
