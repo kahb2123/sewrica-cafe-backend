@@ -599,49 +599,52 @@ router.get('/reports/staff-performance', async (req, res) => {
 
     const match = { ...(Object.keys(range).length ? { createdAt: range } : {}) };
 
-    const [staffData, allStaff] = await Promise.all([
+    const [cashierData, chefData, deliveryData, allStaff] = await Promise.all([
       Order.aggregate([
-        { $match: match },
-        {
-          $facet: {
-            byCashier: [
-              { $match: { processedBy: { $ne: null } } },
-              { $group: { _id: '$processedBy', totalOrders: { $sum: 1 }, totalRevenue: { $sum: '$totalAmount' } } }
-            ],
-            byChef: [
-              { $match: { assignedChef: { $ne: null } } },
-              { $group: { _id: '$assignedChef', totalOrders: { $sum: 1 }, totalRevenue: { $sum: '$totalAmount' } } }
-            ],
-            byDelivery: [
-              { $match: { assignedDelivery: { $ne: null } } },
-              { $group: { _id: '$assignedDelivery', totalOrders: { $sum: 1 }, totalRevenue: { $sum: '$totalAmount' } } }
-            ]
-          }
-        },
-        { $project: { staffGroups: { $concatArrays: ['$byCashier', '$byChef', '$byDelivery'] } } },
-        { $unwind: '$staffGroups' },
-        { $lookup: { from: 'users', localField: 'staffGroups._id', foreignField: '_id', as: 'user' } },
-        { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
-        { $group: {
-          _id: '$staffGroups._id',
-          name: { $first: '$user.name' },
-          role: { $first: '$user.role' },
-          totalOrders: { $sum: '$staffGroups.totalOrders' },
-          totalRevenue: { $sum: '$staffGroups.totalRevenue' }
-        }},
-        { $match: { _id: { $ne: null } } },
-        { $project: {
-          _id: 0,
-          staffId: '$_id',
-          name: 1,
-          role: 1,
-          totalOrders: 1,
-          totalRevenue: { $round: ['$totalRevenue', 2] }
-        }},
-        { $sort: { totalRevenue: -1 } }
+        { $match: { ...match, processedBy: { $ne: null } } },
+        { $group: { _id: '$processedBy', totalOrders: { $sum: 1 }, totalRevenue: { $sum: '$totalAmount' } } }
+      ]),
+      Order.aggregate([
+        { $match: { ...match, assignedChef: { $ne: null } } },
+        { $group: { _id: '$assignedChef', totalOrders: { $sum: 1 }, totalRevenue: { $sum: '$totalAmount' } } }
+      ]),
+      Order.aggregate([
+        { $match: { ...match, assignedDelivery: { $ne: null } } },
+        { $group: { _id: '$assignedDelivery', totalOrders: { $sum: 1 }, totalRevenue: { $sum: '$totalAmount' } } }
       ]),
       User.find({ isActive: true, role: { $in: ['cook', 'delivery', 'cashier'] } }).lean()
     ]);
+
+    const allStaffIds = new Set();
+    const mergedMap = new Map();
+
+    [cashierData, chefData, deliveryData].forEach((dataList) => {
+      dataList.forEach((row) => {
+        const id = String(row._id);
+        allStaffIds.add(id);
+        const existing = mergedMap.get(id) || { totalOrders: 0, totalRevenue: 0 };
+        mergedMap.set(id, {
+          totalOrders: existing.totalOrders + row.totalOrders,
+          totalRevenue: existing.totalRevenue + row.totalRevenue
+        });
+      });
+    });
+
+    const staffIdMap = new Map();
+    (allStaff || []).forEach((u) => {
+      staffIdMap.set(String(u._id), u);
+    });
+
+    const staffData = Array.from(mergedMap.entries()).map(([id, data]) => {
+      const user = staffIdMap.get(id) || {};
+      return {
+        staffId: id,
+        name: user.name || 'Unassigned',
+        role: user.role || 'unknown',
+        totalOrders: data.totalOrders,
+        totalRevenue: Math.round(data.totalRevenue * 100) / 100
+      };
+    }).sort((a, b) => b.totalRevenue - a.totalRevenue);
 
     res.json({ success: true, data: { staff: staffData, allStaff } });
   } catch (error) {
@@ -730,54 +733,55 @@ router.get('/reports/export', async (req, res) => {
     } else {
       const mongoose = require('mongoose');
       const { isValidObjectId } = mongoose;
-      let staffFilter = dateFilter;
-      if (staffId && isValidObjectId(staffId)) {
-        const staffObjId = mongoose.Types.ObjectId(staffId);
-        staffFilter = { ...dateFilter, $or: [
-          { processedBy: staffObjId },
-          { assignedChef: staffObjId },
-          { assignedDelivery: staffObjId }
-        ] };
-      }
+      const staffFilter = staffId && isValidObjectId(staffId)
+        ? { $or: [
+            { processedBy: mongoose.Types.ObjectId(staffId) },
+            { assignedChef: mongoose.Types.ObjectId(staffId) },
+            { assignedDelivery: mongoose.Types.ObjectId(staffId) }
+          ] }
+        : {};
 
-      rows = await Order.aggregate([
-        { $facet: {
-            byCashier: [
-              { $match: { ...staffFilter, processedBy: { $exists: true, $ne: null } } },
-              { $group: { _id: '$processedBy', totalOrders: { $sum: 1 }, totalRevenue: { $sum: '$totalAmount' } } }
-            ],
-            byChef: [
-              { $match: { ...staffFilter, assignedChef: { $exists: true, $ne: null } } },
-              { $group: { _id: '$assignedChef', totalOrders: { $sum: 1 }, totalRevenue: { $sum: '$totalAmount' } } }
-            ],
-            byDelivery: [
-              { $match: { ...staffFilter, assignedDelivery: { $exists: true, $ne: null } } },
-              { $group: { _id: '$assignedDelivery', totalOrders: { $sum: 1 }, totalRevenue: { $sum: '$totalAmount' } } }
-            ]
-          }
-        },
-        { $project: { staffGroups: { $concatArrays: ['$byCashier', '$byChef', '$byDelivery'] } } },
-        { $unwind: '$staffGroups' },
-        { $lookup: { from: 'users', localField: 'staffGroups._id', foreignField: '_id', as: 'user' } },
-        { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
-        { $group: {
-          _id: '$staffGroups._id',
-          name: { $first: '$user.name' },
-          role: { $first: '$user.role' },
-          totalOrders: { $sum: '$staffGroups.totalOrders' },
-          totalRevenue: { $sum: '$staffGroups.totalRevenue' }
-        }},
-        { $match: { _id: { $ne: null } } },
-        { $project: {
-          _id: 0,
-          staffId: '$_id',
-          name: 1,
-          role: 1,
-          totalOrders: 1,
-          totalRevenue: { $round: ['$totalRevenue', 2] }
-        }},
-        { $sort: { totalRevenue: -1 } }
+      const [cashierRows, chefRows, deliveryRows, allStaffList] = await Promise.all([
+        Order.aggregate([
+          { $match: { ...staffFilter, processedBy: { $ne: null } } },
+          { $group: { _id: '$processedBy', totalOrders: { $sum: 1 }, totalRevenue: { $sum: '$totalAmount' } } }
+        ]),
+        Order.aggregate([
+          { $match: { ...staffFilter, assignedChef: { $ne: null } } },
+          { $group: { _id: '$assignedChef', totalOrders: { $sum: 1 }, totalRevenue: { $sum: '$totalAmount' } } }
+        ]),
+        Order.aggregate([
+          { $match: { ...staffFilter, assignedDelivery: { $ne: null } } },
+          { $group: { _id: '$assignedDelivery', totalOrders: { $sum: 1 }, totalRevenue: { $sum: '$totalAmount' } } }
+        ]),
+        User.find({ isActive: true, role: { $in: ['cook', 'delivery', 'cashier'] } }).lean()
       ]);
+
+      const staffIdMap = new Map();
+      (allStaffList || []).forEach((u) => staffIdMap.set(String(u._id), u));
+
+      const mergedMap = new Map();
+      [cashierRows, chefRows, deliveryRows].forEach((dataList) => {
+        dataList.forEach((row) => {
+          const id = String(row._id);
+          const existing = mergedMap.get(id) || { totalOrders: 0, totalRevenue: 0 };
+          mergedMap.set(id, {
+            totalOrders: existing.totalOrders + row.totalOrders,
+            totalRevenue: existing.totalRevenue + row.totalRevenue
+          });
+        });
+      });
+
+      rows = Array.from(mergedMap.entries()).map(([id, data]) => {
+        const user = staffIdMap.get(id) || {};
+        return {
+          staffId: id,
+          name: user.name || 'Unassigned',
+          role: user.role || 'unknown',
+          totalOrders: data.totalOrders,
+          totalRevenue: Math.round(data.totalRevenue * 100) / 100
+        };
+      }).sort((a, b) => b.totalRevenue - a.totalRevenue);
     }
 
     if (format === 'csv') {
@@ -852,29 +856,46 @@ router.get('/reports/staff/:staffId', async (req, res) => {
     }
 
     const staffObjId = mongoose.Types.ObjectId(staffId);
-    const match = Object.keys(range).length ? { createdAt: range } : {};
-    const staffMatch = {
+    const dateMatch = Object.keys(range).length ? { createdAt: range } : {};
+    const staffFilter = {
       $or: [
         { processedBy: staffObjId },
         { assignedChef: staffObjId },
         { assignedDelivery: staffObjId }
       ]
     };
+    const fullFilter = { ...dateMatch, ...staffFilter };
 
-    const [staffInfo, orders, items] = await Promise.all([
-      User.findById(staffId, 'name role email phone').lean(),
-      Order.find({ ...match, ...staffMatch }).select('orderNumber status paymentStatus totalAmount items createdAt').lean(),
-      Order.aggregate([
-        { $match: { ...match, ...staffMatch } },
-        { $unwind: { path: '$items', preserveNullAndEmptyArrays: true } },
-        { $group: {
-          _id: { $ifNull: ['$items.name', 'Unknown item'] },
-          quantity: { $sum: { $ifNull: ['$items.quantity', 0] } },
-          revenue: { $sum: { $multiply: [{ $ifNull: ['$items.price', 0] }, { $ifNull: ['$items.quantity', 0] }] } }
-        }},
-        { $sort: { quantity: -1 } }
-      ])
-    ]);
+    let staffInfo = null, orders = [], items = [];
+    try {
+      [staffInfo, orders] = await Promise.all([
+        User.findById(staffId, 'name role email phone').lean(),
+        Order.find(fullFilter).select('orderNumber status paymentStatus totalAmount items createdAt').lean()
+      ]);
+    } catch (queryError) {
+      console.error('Staff detail query error:', queryError.message, queryError.stack);
+      throw queryError;
+    }
+
+    const itemsMap = new Map();
+    (orders || []).forEach((order) => {
+      (order.items || []).forEach((item) => {
+        const itemName = item?.name || 'Unknown item';
+        const qty = Number(item?.quantity) || 0;
+        const price = Number(item?.price) || 0;
+        const existing = itemsMap.get(itemName) || { quantity: 0, revenue: 0 };
+        itemsMap.set(itemName, {
+          quantity: existing.quantity + qty,
+          revenue: existing.revenue + (price * qty)
+        });
+      });
+    });
+
+    items = Array.from(itemsMap.entries()).map(([name, data]) => ({
+      _id: name,
+      quantity: data.quantity,
+      revenue: data.revenue
+    })).sort((a, b) => b.quantity - a.quantity);
 
     if (!staffInfo) {
       return res.status(404).json({ success: false, message: 'Staff member not found' });
@@ -905,7 +926,7 @@ router.get('/reports/staff/:staffId', async (req, res) => {
 
     res.json({ success: true, data: { staffDetail: detail } });
   } catch (error) {
-    console.error('Staff detail report error:', error);
+    console.error('Staff detail report error:', error.message, error.stack);
     res.status(500).json({ success: false, message: 'Failed to build staff detail report' });
   }
 });
