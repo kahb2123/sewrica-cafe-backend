@@ -2,7 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/authMiddleware');
-const { requirePermission } = require('../middleware/roleMiddleware');
+const { requirePermission, requirePagePermission } = require('../middleware/roleMiddleware');
 const { PERMISSIONS } = require('../config/roleMap');
 const Order = require('../models/Order');
 const User = require('../models/User');
@@ -737,9 +737,9 @@ router.get('/orders/kitchen',
 
 // @desc    Assign chef to order (for kitchen display)
 // @route   POST /api/staff/orders/:orderId/assign-chef
-// @access  Private (cook, chef, admin)
+// @access  Private (cook, chef, admin with write access to staffOrdersCooking)
 router.post('/orders/:orderId/assign-chef',
-  requirePermission(PERMISSIONS.ORDERS_ASSIGN_CHEF),
+  requirePagePermission('staffOrdersCooking', 'write'),
   async (req, res) => {
     try {
       const { orderId } = req.params;
@@ -777,9 +777,9 @@ router.post('/orders/:orderId/assign-chef',
 
 // @desc    Assign or reassign delivery person to order (for kitchen display)
 // @route   POST /api/staff/orders/:orderId/assign-delivery
-// @access  Private (cook, chef, admin)
+// @access  Private (cook, chef, admin with write access to staffOrdersCooking)
 router.post('/orders/:orderId/assign-delivery',
-  requirePermission(PERMISSIONS.ORDERS_ASSIGN_DELIVERY),
+  requirePagePermission('staffOrdersCooking', 'write'),
   async (req, res) => {
     try {
       const { orderId } = req.params;
