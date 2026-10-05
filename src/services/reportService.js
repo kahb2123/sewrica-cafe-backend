@@ -681,26 +681,26 @@ const buildPdf = (report, PDFDocument) => {
   // ---------- helpers ----------
 
   const drawHeader = () => {
-    const top = PDF_MARGIN;
-    doc.rect(0, 0, doc.page.width, 118).fill(PDF_COLORS.brand);
+    const headerHeight = 144;
+    doc.rect(0, 0, doc.page.width, headerHeight).fill(PDF_COLORS.brand);
 
     doc.fillColor('#ffffff').fontSize(11).font('Helvetica-Bold')
-      .text('SEWRICA CAFE', PDF_MARGIN, top + 20, { characterSpacing: 2 });
+      .text('SEWRICA CAFE', PDF_MARGIN, 19, { characterSpacing: 2 });
 
     doc.fontSize(23).font('Helvetica-Bold')
-      .text(report.staffDetail ? 'Individual Staff Report' : 'Business Report', PDF_MARGIN, top + 36);
+      .text(report.staffDetail ? 'Individual Staff Report' : 'Business Report', PDF_MARGIN, 38);
 
-    doc.fontSize(10).font('Helvetica').fillColor('#cfe6dd')
+    doc.fontSize(10).font('Helvetica').fillColor('#e3f1ec')
       .text(report.staffDetail
         ? `${report.staffDetail.name}  ·  ${report.staffDetail.role}`
         : `${report.period.start}  to  ${report.period.end}   ·   ${report.period.days} days`,
-      PDF_MARGIN, top + 68, { width: contentWidth, ellipsis: true, lineBreak: false });
+      PDF_MARGIN, 73, { width: contentWidth, ellipsis: true, lineBreak: false });
 
-    doc.fontSize(8).font('Helvetica').fillColor('#a9cfc1')
+    doc.fontSize(8).font('Helvetica').fillColor('#cfe6dd')
       .text(`${report.period.start} to ${report.period.end}   ·   Generated ${new Date().toLocaleString('en-GB')}   ·   ${report.period.timezone} cafe time`,
-        PDF_MARGIN, top + 88, { width: contentWidth, ellipsis: true, lineBreak: false });
+        PDF_MARGIN, 98, { width: contentWidth, ellipsis: true, lineBreak: false });
 
-    doc.y = 118 + 26;
+    doc.y = headerHeight + 24;
   };
 
   // Metric cards laid out in a responsive grid
@@ -708,15 +708,17 @@ const buildPdf = (report, PDFDocument) => {
     const gap = 10;
     const perRow = 3;
     const cardWidth = (contentWidth - gap * (perRow - 1)) / perRow;
+    const rowCount = Math.ceil(cards.length / perRow);
+    const cardsHeight = rowCount * 62;
 
+    if (doc.y > doc.page.height - PDF_MARGIN - cardsHeight) doc.addPage();
+    const cardsTop = doc.y;
     cards.forEach((card, index) => {
       const col = index % perRow;
       const row = Math.floor(index / perRow);
 
-      if (col === 0 && doc.y > doc.page.height - 150) doc.addPage();
-
       const x = PDF_MARGIN + col * (cardWidth + gap);
-      const y = doc.y + row * 62;
+      const y = cardsTop + row * 62;
       const height = 52;
 
       doc.roundedRect(x, y, cardWidth, height, 6).fill(PDF_COLORS.card);
@@ -734,7 +736,7 @@ const buildPdf = (report, PDFDocument) => {
       }
     });
 
-    doc.y += Math.ceil(cards.length / perRow) * 62 + 4;
+    doc.y = cardsTop + cardsHeight + 4;
   };
 
 /**
