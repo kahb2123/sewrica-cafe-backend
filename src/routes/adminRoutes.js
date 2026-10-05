@@ -558,14 +558,26 @@ router.get('/reports/export', async (req, res) => {
     if (!['csv', 'pdf'].includes(format)) {
       return res.status(400).json({ success: false, message: 'Format must be csv or pdf' });
     }
+    if (req.query.staffId && !require('mongoose').isValidObjectId(req.query.staffId)) {
+      return res.status(400).json({ success: false, message: 'Invalid staff ID' });
+    }
 
     const report = await getUnifiedReport({
       start: req.query.start,
       end: req.query.end,
       role: req.query.role,
-      section: req.query.section
+      staffId: req.query.staffId,
+      section: req.query.section || (
+        req.query.type === 'items' || req.query.type === 'staff' ? req.query.type : undefined
+      )
     });
-    const filename = `sewrica-report-${report.period.start}-to-${report.period.end}.${format}`;
+    if (req.query.staffId && !report.staffDetail) {
+      return res.status(404).json({ success: false, message: 'Staff member not found' });
+    }
+    const reportLabel = report.staffDetail
+      ? `staff-${String(report.staffDetail.name || 'individual').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
+      : report.section === 'items' ? 'items' : report.section === 'staff' ? 'staff' : 'business';
+    const filename = `sewrica-${reportLabel}-report-${report.period.start}-to-${report.period.end}.${format}`;
 
     if (format === 'csv') {
       res.set({

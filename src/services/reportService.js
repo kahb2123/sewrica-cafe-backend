@@ -233,29 +233,28 @@ const getStaffPerformance = async (start, end, roleFilter) => {
     ...cashiers.map((row) => ({ ...row, role: 'cashier' }))
   ];
 
-  if (!rows.length) return [];
-
-  // One lookup for every staff id instead of one query per staff member.
-  const staff = await User.find(
-    { _id: { $in: rows.map((row) => row._id) } },
+  const members = await User.find(
+    { isActive: true, role: { $in: STAFF_ROLES } },
     'name role email'
   ).lean();
+  const performanceById = new Map(rows.map((row) => [String(row._id), row]));
 
-  const nameById = new Map(staff.map((member) => [String(member._id), member.name]));
-
-  return rows
-    .map((row) => ({
-      staffId: row._id,
-      name: nameById.get(String(row._id)) || 'Unknown',
-      role: row.role,
-      totalOrders: row.totalOrders,
-      completedOrders: row.completed,
-      cancelledOrders: row.cancelled,
-      revenue: round2(row.revenue),
-      avgCookingMinutes: row.avgCookingMinutes ? Math.round(row.avgCookingMinutes) : null,
-      cashCollected: round2(row.cashCollected || 0),
-      completionRate: row.totalOrders ? Math.round((row.completed / row.totalOrders) * 100) : 0
-    }))
+  return members
+    .map((member) => {
+      const row = performanceById.get(String(member._id)) || {};
+      return {
+        staffId: member._id,
+        name: member.name || 'Unknown',
+        role: member.role,
+        totalOrders: row.totalOrders || 0,
+        completedOrders: row.completed || 0,
+        cancelledOrders: row.cancelled || 0,
+        revenue: round2(row.revenue),
+        avgCookingMinutes: row.avgCookingMinutes ? Math.round(row.avgCookingMinutes) : null,
+        cashCollected: round2(row.cashCollected || 0),
+        completionRate: row.totalOrders ? Math.round((row.completed / row.totalOrders) * 100) : 0
+      };
+    })
     .filter((row) => !roleFilter || roleFilter === 'all' || row.role === roleFilter)
     .sort((a, b) => b.totalOrders - a.totalOrders);
 };
@@ -595,15 +594,58 @@ const buildCsv = (report) => {
   }
 
   if (wantStaff) {
-    rows.push(
-      ['STAFF PERFORMANCE'],
-      ['Name', 'Role', 'Total orders', 'Completed', 'Cancelled', 'Revenue (ETB)', 'Completion %'],
-      ...report.staff.map((row) => [
-        row.name, row.role, row.totalOrders, row.completedOrders,
-        row.cancelledOrders, row.revenue, row.completionRate
-      ]),
-      []
-    );
+    if (report.staffDetail) {
+      const detail = report.staffDetail;
+      const summary = detail.summary || {};
+      rows.push(
+        ['INDIVIDUAL STAFF REPORT'],
+        ['Name', detail.name],
+        ['Role', detail.role],
+        ['Email', detail.email],
+        ['Phone', detail.phone],
+        [],
+        ['SUMMARY'],
+        ['Total orders', summary.totalOrders],
+        ['Completed orders', summary.completedOrders],
+        ['Cancelled orders', summary.cancelledOrders],
+        ['Completion rate (%)', summary.completionRate],
+        ['Paid revenue (ETB)', summary.paidRevenue],
+        ['Outstanding revenue (ETB)', summary.outstandingRevenue],
+        ['Items handled', summary.totalItemsCooked],
+        [],
+        ['ITEMS HANDLED'],
+        ['Item', 'Quantity'],
+        ...Object.entries(detail.itemsBreakdown || {}),
+        [],
+        ['DAILY PERFORMANCE'],
+        ['Date', 'Orders', 'Completed', 'Cancelled', 'Order value (ETB)', 'Avg cooking (min)'],
+        ...Object.entries(detail.dailyBreakdown || {}).map(([date, day]) => [
+          date, day.count, day.completed, day.cancelled, day.totalAmount, day.avgCookingMinutes
+        ]),
+        [],
+        ['RECENT ORDERS (UP TO 60)'],
+        ['Order #', 'Date', 'Status', 'Payment status', 'Amount (ETB)', 'Items'],
+        ...(detail.orders || []).map((order) => [
+          order.orderNumber,
+          order.createdAt ? new Date(order.createdAt).toISOString() : '',
+          order.status,
+          order.paymentStatus,
+          order.totalAmount,
+          (order.items || []).map((item) => `${item.name} x ${item.quantity}`).join('; ')
+        ]),
+        []
+      );
+    } else {
+      rows.push(
+        ['STAFF PERFORMANCE'],
+        ['Name', 'Role', 'Total orders', 'Completed', 'Cancelled', 'Revenue (ETB)', 'Completion %'],
+        ...report.staff.map((row) => [
+          row.name, row.role, row.totalOrders, row.completedOrders,
+          row.cancelledOrders, row.revenue, row.completionRate
+        ]),
+        []
+      );
+    }
   }
 
   return rows.map((row) => row.map(csvCell).join(',')).join('\n');
@@ -646,13 +688,17 @@ const buildPdf = (report, PDFDocument) => {
       .text('SEWRICA CAFE', PDF_MARGIN, top + 20, { characterSpacing: 2 });
 
     doc.fontSize(23).font('Helvetica-Bold')
-      .text('Business Report', PDF_MARGIN, top + 36);
+      .text(report.staffDetail ? 'Individual Staff Report' : 'Business Report', PDF_MARGIN, top + 36);
 
     doc.fontSize(10).font('Helvetica').fillColor('#cfe6dd')
-      .text(`${report.period.start}  to  ${report.period.end}   ·   ${report.period.days} days`, PDF_MARGIN, top + 68);
+      .text(report.staffDetail
+        ? `${report.staffDetail.name}  ·  ${report.staffDetail.role}`
+        : `${report.period.start}  to  ${report.period.end}   ·   ${report.period.days} days`,
+      PDF_MARGIN, top + 68, { width: contentWidth, ellipsis: true, lineBreak: false });
 
     doc.fontSize(8).font('Helvetica').fillColor('#a9cfc1')
-      .text(`Generated ${new Date().toLocaleString('en-GB')}   ·   Times shown in ${report.period.timezone} (cafe local)`, PDF_MARGIN, top + 88);
+      .text(`${report.period.start} to ${report.period.end}   ·   Generated ${new Date().toLocaleString('en-GB')}   ·   ${report.period.timezone} cafe time`,
+        PDF_MARGIN, top + 88, { width: contentWidth, ellipsis: true, lineBreak: false });
 
     doc.y = 118 + 26;
   };
@@ -792,7 +838,17 @@ const buildPdf = (report, PDFDocument) => {
 
   drawHeader();
 
-  if (wantSales || wantItems) {
+  if (report.staffDetail) {
+    const summary = report.staffDetail.summary || {};
+    drawCards([
+      { label: 'Orders handled', value: (summary.totalOrders || 0).toLocaleString('en-ET'), color: '#2f6fb5' },
+      { label: 'Completed', value: (summary.completedOrders || 0).toLocaleString('en-ET'), sub: `${summary.completionRate || 0}% completion`, color: '#1f6f5c' },
+      { label: 'Paid revenue', value: money(summary.paidRevenue), color: '#1f6f5c' },
+      { label: 'Outstanding', value: money(summary.outstandingRevenue), color: '#c08420' },
+      { label: 'Cancelled', value: (summary.cancelledOrders || 0).toLocaleString('en-ET'), color: '#b3402a' },
+      { label: 'Items handled', value: (summary.totalItemsCooked || 0).toLocaleString('en-ET'), color: '#6b4fa8' }
+    ]);
+  } else if (wantSales || wantItems) {
     drawCards([
       { label: 'Total orders', value: (t.totalOrders || 0).toLocaleString('en-ET'), sub: `${t.paidOrders || 0} paid · ${t.cancelledOrders || 0} cancelled`, color: '#2f6fb5' },
       { label: 'Paid revenue', value: money(t.paidRevenue), sub: 'Settled payments only', color: '#1f6f5c' },
@@ -889,7 +945,67 @@ const buildPdf = (report, PDFDocument) => {
   }
 
   if (wantStaff) {
-    if (report.staff.length) {
+    if (report.staffDetail) {
+      const detail = report.staffDetail;
+      drawSectionTitle('Staff profile');
+      doc.fillColor(PDF_COLORS.body).fontSize(9).font('Helvetica')
+        .text(`Name: ${detail.name || '—'}     Role: ${detail.role || '—'}`, PDF_MARGIN, doc.y);
+      doc.y += 14;
+      if (detail.email || detail.phone || detail.firstAssignedAt) {
+        doc.fillColor(PDF_COLORS.muted).fontSize(8).font('Helvetica')
+          .text([
+            detail.email && `Email: ${detail.email}`,
+            detail.phone && `Phone: ${detail.phone}`,
+            detail.firstAssignedAt && `First assigned: ${new Date(detail.firstAssignedAt).toLocaleDateString('en-GB')}`
+          ].filter(Boolean).join('     ·     '), PDF_MARGIN, doc.y, { width: contentWidth });
+        doc.y += 16;
+      }
+
+      const handledItems = Object.entries(detail.itemsBreakdown || {})
+        .sort(([, a], [, b]) => Number(b) - Number(a))
+        .map(([name, quantity]) => ({ name, quantity: Number(quantity || 0).toLocaleString('en-ET') }));
+      drawSectionTitle('Items handled', 'Item quantities associated with this staff member');
+      drawTable([
+        { key: 'name', label: 'Item', width: 0.72 },
+        { key: 'quantity', label: 'Quantity', width: 0.28, align: 'right' }
+      ], handledItems);
+
+      const dailyRows = Object.entries(detail.dailyBreakdown || {}).map(([date, day]) => ({
+        date,
+        orders: day.count,
+        completed: day.completed,
+        cancelled: day.cancelled,
+        orderValue: money(day.totalAmount),
+        avgCooking: day.avgCookingMinutes == null ? '—' : `${day.avgCookingMinutes} min`
+      }));
+      drawSectionTitle('Daily performance');
+      drawTable([
+        { key: 'date', label: 'Date', width: 0.19 },
+        { key: 'orders', label: 'Orders', width: 0.13, align: 'right' },
+        { key: 'completed', label: 'Done', width: 0.13, align: 'right' },
+        { key: 'cancelled', label: 'Cancelled', width: 0.14, align: 'right' },
+        { key: 'orderValue', label: 'Order value', width: 0.24, align: 'right' },
+        { key: 'avgCooking', label: 'Avg cook', width: 0.17, align: 'right' }
+      ], dailyRows);
+
+      const recentOrders = (detail.orders || []).map((order) => ({
+        orderNumber: order.orderNumber || '—',
+        date: order.createdAt ? new Date(order.createdAt).toLocaleDateString('en-GB') : '—',
+        status: order.status || '—',
+        payment: order.paymentStatus || '—',
+        amount: money(order.totalAmount),
+        items: (order.items || []).map((item) => `${item.name} x${item.quantity}`).join(', ') || '—'
+      }));
+      drawSectionTitle('Recent orders', `Most recent ${recentOrders.length} orders in the selected period`);
+      drawTable([
+        { key: 'orderNumber', label: 'Order #', width: 0.16 },
+        { key: 'date', label: 'Date', width: 0.13 },
+        { key: 'status', label: 'Status', width: 0.13 },
+        { key: 'payment', label: 'Payment', width: 0.15 },
+        { key: 'amount', label: 'Amount', width: 0.18, align: 'right' },
+        { key: 'items', label: 'Items', width: 0.25 }
+      ], recentOrders);
+    } else if (report.staff.length) {
       drawSectionTitle('Staff performance', 'Revenue is credited to whoever completed the assigned work');
       drawTable(
         [
