@@ -446,30 +446,35 @@ const getUnifiedReport = async ({ start, end, role, staffId, section } = {}) => 
     staffId ? getStaffDetail(staffId, range.start, range.end) : Promise.resolve(null)
   ]);
 
-  const totalsList = wantSales ? (facets.totals || []) : [];
+  const totalsList = wantSales || wantItems ? (facets.totals || []) : [];
   const totals = totalsList[0] || {};
   const totalOrders = totals.totalOrders || 0;
   const paidOrders = totals.paidOrders || 0;
   const paidRevenue = round2(totals.paidRevenue);
   const outstandingRevenue = round2(totals.outstandingRevenue);
 
-  const categories = (wantItems ? facets.categories : []) || []
+  const categoryRows = ((wantItems ? facets.categories : []) || [])
     .filter((row) => row._id)
     .map((row) => ({
       category: row._id,
       itemsSold: row.itemsSold,
-      revenue: round2(row.revenue),
-      share: paidRevenue ? Math.round((row.revenue / paidRevenue) * 100) : 0
-    }));
-
-  const topItems = (wantItems ? facets.topItems : []) || []
-    .map((row) => ({
-      name: row._id,
-      quantity: row.quantity,
       revenue: round2(row.revenue)
     }));
 
-  const paymentMethods = (wantSales ? facets.paymentMethods : []) || []
+  const totalItemRevenue = categoryRows.reduce((sum, row) => sum + row.revenue, 0);
+  const categories = categoryRows.map((row) => ({
+    ...row,
+    share: totalItemRevenue ? Math.round((row.revenue / totalItemRevenue) * 100) : 0
+  }));
+
+  const topItems = ((wantItems ? facets.topItems : []) || [])
+    .map((row) => ({
+      name: row.name || row._id || 'Unknown item',
+      quantity: Number(row.quantity) || 0,
+      revenue: round2(row.revenue)
+    }));
+
+  const paymentMethods = ((wantSales ? facets.paymentMethods : []) || [])
     .filter((row) => row._id)
     .map((row) => ({
       method: row._id,
@@ -497,24 +502,24 @@ const getUnifiedReport = async ({ start, end, role, staffId, section } = {}) => 
       averageOrderValue: paidOrders ? round2(paidRevenue / paidOrders) : 0,
       avgCookingMinutes: totals.avgCookingMinutes ? Math.round(totals.avgCookingMinutes) : 0
     },
-    daily: (wantSales ? facets.daily : []) || []
+    daily: ((wantSales ? facets.daily : []) || [])
       .filter((row) => row._id)
       .map((row) => ({
         date: row._id,
         orders: row.orders,
         paidRevenue: round2(row.paidRevenue)
       })),
-    hourly: (wantSales ? facets.hourly : []) || []
+    hourly: ((wantSales ? facets.hourly : []) || [])
       .filter((row) => row._id)
       .map((row) => ({
         hour: row._id,
         orders: row.orders,
         paidRevenue: round2(row.paidRevenue)
       })),
-    statusBreakdown: (wantSales ? facets.statusBreakdown : []) || []
+    statusBreakdown: ((wantSales ? facets.statusBreakdown : []) || [])
       .map((row) => ({ status: row._id, count: row.count })),
     paymentMethods,
-    orderChannels: (wantSales ? facets.orderChannels : []) || []
+    orderChannels: ((wantSales ? facets.orderChannels : []) || [])
       .filter((row) => row._id)
       .map((row) => ({ channel: row._id, count: row.count })),
     categories,
@@ -679,6 +684,15 @@ const buildPdf = (report, PDFDocument) => {
   const t = report.totals || {};
   const contentWidth = doc.page.width - PDF_MARGIN * 2;
   const right = doc.page.width - PDF_MARGIN;
+  const reportTitle = report.staffDetail
+    ? 'Individual Staff Report'
+    : report.section === 'items'
+      ? 'Menu Items Report'
+      : report.section === 'staff'
+        ? 'Staff Performance Report'
+        : report.section === 'sales'
+          ? 'Sales Report'
+          : 'Business Report';
 
   // ---------- helpers ----------
 
@@ -690,7 +704,7 @@ const buildPdf = (report, PDFDocument) => {
       .text('SEWRICA CAFE', PDF_MARGIN, 19, { characterSpacing: 2 });
 
     doc.fontSize(23).font('Helvetica-Bold')
-      .text(report.staffDetail ? 'Individual Staff Report' : 'Business Report', PDF_MARGIN, 38);
+      .text(reportTitle, PDF_MARGIN, 38);
 
     doc.fontSize(10).font('Helvetica').fillColor('#e3f1ec')
       .text(report.staffDetail
@@ -1040,14 +1054,15 @@ const buildPdf = (report, PDFDocument) => {
   const range = doc.bufferedPageRange();
   for (let i = 0; i < range.count; i++) {
     doc.switchToPage(range.start + i);
-    const y = doc.page.height - 34;
+    const y = doc.page.height - PDF_MARGIN - 16;
 
     doc.moveTo(PDF_MARGIN, y - 6).lineTo(right, y - 6).lineWidth(0.5).stroke(PDF_COLORS.line);
     doc.fillColor(PDF_COLORS.muted).fontSize(7.5).font('Helvetica')
-      .text('Sewrica Cafe · Confidential', PDF_MARGIN, y, { width: contentWidth / 2 });
+      .text('Sewrica Cafe · Confidential', PDF_MARGIN, y, { width: contentWidth / 2, lineBreak: false });
     doc.text(`Page ${i + 1} of ${range.count}`, PDF_MARGIN + contentWidth / 2, y, {
       width: contentWidth / 2,
-      align: 'right'
+      align: 'right',
+      lineBreak: false
     });
   }
 
