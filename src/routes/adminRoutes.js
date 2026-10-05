@@ -33,7 +33,7 @@ router.post('/staff', async (req, res) => {
     if (!validRoles.includes(role)) {
       return res.status(400).json({ 
         success: false,
-        message: 'Invalid role. Must be one of: cook, delivery, cashier, admin' 
+        message: 'Invalid role. Must be one of: cook, delivery, cashier, supply_chain, admin'
       });
     }
     
@@ -493,6 +493,10 @@ router.get('/users', async (req, res) => {
 router.put('/users/:id/role', async (req, res) => {
   try {
     const { role } = req.body;
+
+    if (!['customer', 'admin', 'cashier', 'cook', 'delivery', 'supply_chain'].includes(role)) {
+      return res.status(400).json({ success: false, message: 'Invalid user role' });
+    }
     
     const user = await User.findById(req.params.id);
     if (!user) {
