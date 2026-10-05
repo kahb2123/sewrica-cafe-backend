@@ -281,7 +281,9 @@ const getStaffDetail = async (staffId, start, end) => {
       ? 'assignedDelivery'
       : 'processedBy';
 
-  const match = { ...range, [assignmentField]: staffId };
+  // Aggregation pipelines do not cast string IDs to ObjectIds like Mongoose
+  // queries do. Use the ObjectId from the loaded staff document for both paths.
+  const match = { ...range, [assignmentField]: member._id };
 
   const [items, daily, orders, assignedAt] = await Promise.all([
     Order.aggregate([
