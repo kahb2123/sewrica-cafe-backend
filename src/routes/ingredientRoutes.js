@@ -2,8 +2,10 @@ const express = require('express');
 const router = express.Router();
 const Ingredient = require('../models/Ingredient');
 const IngredientWithdrawal = require('../models/IngredientWithdrawal');
+const User = require('../models/User');
 const { protect } = require('../middleware/authMiddleware');
 const { requirePagePermission } = require('../middleware/roleMiddleware');
+const { buildDateRange } = require('../services/reportService');
 
 router.use(protect);
 
@@ -15,6 +17,71 @@ router.get('/', requirePagePermission('adminIngredients', 'read'), async (req, r
     res.json({ success: true, data: ingredients });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to load ingredients' });
+  }
+});
+
+router.get('/report', requirePagePermission('adminIngredients', 'read'), async (req, res) => {
+  try {
+    const range = buildDateRange(req.query.start, req.query.end);
+    const [stockIn, stockOut] = await Promise.all([
+      Ingredient.aggregate([
+        { $unwind: '$purchases' },
+        { $match: { 'purchases.purchasedAt': { $gte: range.start, $lt: range.end } } },
+        {
+          $project: {
+            _id: '$purchases._id',
+            ingredientId: '$_id',
+            ingredientName: '$name',
+            unit: '$unit',
+            quantity: '$purchases.quantity',
+            unitCost: { $ifNull: ['$purchases.unitCost', 0] },
+            totalValue: {
+              $multiply: [
+                { $ifNull: ['$purchases.quantity', 0] },
+                { $ifNull: ['$purchases.unitCost', 0] }
+              ]
+            },
+            supplier: { $ifNull: ['$purchases.supplier', ''] },
+            performedBy: '$purchases.purchasedBy',
+            createdAt: '$purchases.purchasedAt',
+            type: { $literal: 'stock_in' }
+          }
+        },
+        {
+          $lookup: {
+            from: User.collection.name,
+            localField: 'performedBy',
+            foreignField: '_id',
+            as: 'performer'
+          }
+        },
+        {
+          $addFields: {
+            performedByName: { $ifNull: [{ $arrayElemAt: ['$performer.name', 0] }, ''] }
+          }
+        },
+        { $project: { performer: 0 } },
+        { $sort: { createdAt: -1 } }
+      ]),
+      IngredientWithdrawal.find({
+        createdAt: { $gte: range.start, $lt: range.end }
+      }).sort({ createdAt: -1 }).lean()
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        period: { start: range.startLabel, end: range.endLabel, days: range.days },
+        stockIn,
+        stockOut: stockOut.map((entry) => ({ ...entry, type: 'stock_out' }))
+      }
+    });
+  } catch (error) {
+    const invalidRange = /Invalid date range|Start date must be before or equal/i.test(error.message);
+    res.status(invalidRange ? 400 : 500).json({
+      success: false,
+      message: error.message || 'Failed to build stock movement report'
+    });
   }
 });
 
@@ -30,7 +97,13 @@ router.post('/', requirePagePermission('adminIngredients', 'write'), async (req,
       quantity: Number(quantity),
       unitPrice: Number(unitPrice),
       reorderLevel: Number(reorderLevel),
-      supplier
+      supplier,
+      purchases: Number(quantity) > 0 ? [{
+        quantity: Number(quantity),
+        unitCost: Number(unitPrice),
+        supplier,
+        purchasedBy: req.user._id
+      }] : []
     });
     res.status(201).json({ success: true, data: ingredient });
   } catch (error) {
