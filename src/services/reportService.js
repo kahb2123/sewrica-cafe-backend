@@ -759,12 +759,13 @@ const buildPdf = (report, PDFDocument) => {
     const rowHeight = 19;
     const renderHead = () => {
       if (doc.y > doc.page.height - 120) doc.addPage();
-      doc.rect(PDF_MARGIN, doc.y, contentWidth, rowHeight).fill(PDF_COLORS.brandDark);
+      const headerY = doc.y;
+      doc.rect(PDF_MARGIN, headerY, contentWidth, rowHeight).fill(PDF_COLORS.brandDark);
       let x = PDF_MARGIN + 8;
       doc.fillColor('#ffffff').fontSize(8).font('Helvetica-Bold');
       columns.forEach((col) => {
         const w = contentWidth * (col.width || 0.25) - 16;
-        doc.text(col.label.toUpperCase(), x, doc.y + 6, {
+        doc.text(col.label.toUpperCase(), x, headerY + 6, {
           width: w,
           align: col.align || 'left',
           characterSpacing: 0.4,
@@ -773,7 +774,7 @@ const buildPdf = (report, PDFDocument) => {
         });
         x += contentWidth * (col.width || 0.25);
       });
-      doc.y += rowHeight;
+      doc.y = headerY + rowHeight;
     };
 
     if (repeatHeader) renderHead();
@@ -784,13 +785,14 @@ const buildPdf = (report, PDFDocument) => {
         renderHead();
       }
 
-      if (index % 2 === 1) doc.rect(PDF_MARGIN, doc.y, contentWidth, rowHeight).fill(PDF_COLORS.zebra);
+      const rowY = doc.y;
+      if (index % 2 === 1) doc.rect(PDF_MARGIN, rowY, contentWidth, rowHeight).fill(PDF_COLORS.zebra);
 
       let x = PDF_MARGIN + 8;
       doc.fillColor(PDF_COLORS.body).fontSize(8.5).font('Helvetica');
       columns.forEach((col) => {
         const w = contentWidth * (col.width || 0.25) - 16;
-        doc.text(String(row[col.key] ?? '—'), x, doc.y + 6, {
+        doc.text(String(row[col.key] ?? '—'), x, rowY + 6, {
           width: w,
           align: col.align || 'left',
           ellipsis: true,
@@ -799,7 +801,7 @@ const buildPdf = (report, PDFDocument) => {
         x += contentWidth * (col.width || 0.25);
       });
 
-      doc.y += rowHeight;
+      doc.y = rowY + rowHeight;
       doc.moveTo(PDF_MARGIN, doc.y).lineTo(right, doc.y).lineWidth(0.4).stroke(PDF_COLORS.line);
     });
 
