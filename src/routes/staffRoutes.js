@@ -4,11 +4,17 @@ const router = express.Router();
 const { protect } = require('../middleware/authMiddleware');
 const { requirePermission, requirePagePermission } = require('../middleware/roleMiddleware');
 const { PERMISSIONS } = require('../config/roleMap');
+const { updateOrderStatus } = require('../controllers/orderController');
 const Order = require('../models/Order');
 const User = require('../models/User');
 
 // Apply protect middleware to ALL staff routes
 router.use(protect);
+
+const requireDashboardPage = (action) => (req, res, next) => {
+  const page = req.user.role === 'admin' ? 'adminDashboard' : 'staffDashboard';
+  return requirePagePermission(page, action)(req, res, next);
+};
 
 // Debug middleware to log user info for all staff routes
 router.use((req, res, next) => {
@@ -18,7 +24,10 @@ router.use((req, res, next) => {
 });
 
 // ========== GET STAFF BY ROLE ==========
-router.get('/:role', requirePermission(PERMISSIONS.STAFF_VIEW), async (req, res) => {
+router.get('/:role',
+  requireDashboardPage('read'),
+  requirePermission(PERMISSIONS.STAFF_VIEW),
+  async (req, res) => {
   try {
     const { role } = req.params;
     const validRoles = ['cook', 'delivery', 'cashier'];
@@ -47,6 +56,8 @@ router.get('/:role', requirePermission(PERMISSIONS.STAFF_VIEW), async (req, res)
 
 // Get orders assigned to current chef (active cooking orders)
 router.get('/orders/cooking',
+  requirePagePermission('staffDashboard', 'read'),
+  requirePagePermission('staffOrdersCooking', 'read'),
   requirePermission(PERMISSIONS.ORDERS_VIEW_ASSIGNED),
   requirePermission(PERMISSIONS.ORDERS_ACCEPT),
   async (req, res) => {
@@ -70,6 +81,8 @@ router.get('/orders/cooking',
 
 // Get orders assigned to current delivery person (active deliveries)
 router.get('/orders/delivery',
+  requirePagePermission('staffDashboard', 'read'),
+  requirePagePermission('staffOrdersDelivery', 'read'),
   requirePermission(PERMISSIONS.ORDERS_VIEW_ASSIGNED),
   requirePermission(PERMISSIONS.ORDERS_ACCEPT),
   async (req, res) => {
@@ -93,6 +106,8 @@ router.get('/orders/delivery',
 
 // Get completed orders for chef
 router.get('/orders/cooking/completed',
+  requirePagePermission('staffDashboard', 'read'),
+  requirePagePermission('staffOrdersCooking', 'read'),
   requirePermission(PERMISSIONS.ORDERS_VIEW),
   async (req, res) => {
     try {
@@ -116,6 +131,8 @@ router.get('/orders/cooking/completed',
 
 // Get completed deliveries for delivery person
 router.get('/orders/delivery/completed',
+  requirePagePermission('staffDashboard', 'read'),
+  requirePagePermission('staffOrdersDelivery', 'read'),
   requirePermission(PERMISSIONS.ORDERS_VIEW),
   async (req, res) => {
     try {
@@ -141,6 +158,8 @@ router.get('/orders/delivery/completed',
 
 // Chef accepts order
 router.post('/orders/:orderId/chef-accept',
+  requirePagePermission('staffDashboard', 'write'),
+  requirePagePermission('staffOrdersCooking', 'write'),
   requirePermission(PERMISSIONS.ORDERS_ACCEPT),
   async (req, res) => {
     try {
@@ -207,6 +226,8 @@ router.post('/orders/:orderId/chef-accept',
 
 // Chef rejects order
 router.post('/orders/:orderId/chef-reject',
+  requirePagePermission('staffDashboard', 'write'),
+  requirePagePermission('staffOrdersCooking', 'write'),
   requirePermission(PERMISSIONS.ORDERS_REJECT),
   async (req, res) => {
     try {
@@ -267,6 +288,8 @@ router.post('/orders/:orderId/chef-reject',
 
 // Delivery accepts order
 router.post('/orders/:orderId/delivery-accept',
+  requirePagePermission('staffDashboard', 'write'),
+  requirePagePermission('staffOrdersDelivery', 'write'),
   requirePermission(PERMISSIONS.ORDERS_ACCEPT),
   async (req, res) => {
     try {
@@ -327,6 +350,8 @@ router.post('/orders/:orderId/delivery-accept',
 
 // Delivery rejects order
 router.post('/orders/:orderId/delivery-reject',
+  requirePagePermission('staffDashboard', 'write'),
+  requirePagePermission('staffOrdersDelivery', 'write'),
   requirePermission(PERMISSIONS.ORDERS_REJECT),
   async (req, res) => {
     try {
@@ -387,6 +412,8 @@ router.post('/orders/:orderId/delivery-reject',
 
 // Chef starts cooking
 router.post('/start-cooking/:orderId',
+  requirePagePermission('staffDashboard', 'write'),
+  requirePagePermission('staffOrdersCooking', 'write'),
   requirePermission(PERMISSIONS.ORDERS_START_COOKING),
   async (req, res) => {
     try {
@@ -441,6 +468,8 @@ router.post('/start-cooking/:orderId',
 
 // Chef completes cooking (marks as ready)
 router.post('/complete-cooking/:orderId',
+  requirePagePermission('staffDashboard', 'write'),
+  requirePagePermission('staffOrdersCooking', 'write'),
   requirePermission(PERMISSIONS.ORDERS_COMPLETE_COOKING),
   async (req, res) => {
     try {
@@ -516,6 +545,8 @@ router.post('/complete-cooking/:orderId',
 
 // Delivery starts delivery
 router.post('/start-delivery/:orderId',
+  requirePagePermission('staffDashboard', 'write'),
+  requirePagePermission('staffOrdersDelivery', 'write'),
   requirePermission(PERMISSIONS.ORDERS_START_DELIVERY),
   async (req, res) => {
     try {
@@ -570,6 +601,8 @@ router.post('/start-delivery/:orderId',
 
 // Delivery completes delivery
 router.post('/complete-delivery/:orderId',
+  requirePagePermission('staffDashboard', 'write'),
+  requirePagePermission('staffOrdersDelivery', 'write'),
   requirePermission(PERMISSIONS.ORDERS_COMPLETE_DELIVERY),
   async (req, res) => {
     try {
@@ -631,6 +664,8 @@ router.post('/complete-delivery/:orderId',
 
 // Get chef stats
 router.get('/stats/chef',
+  requirePagePermission('staffDashboard', 'read'),
+  requirePagePermission('staffStats', 'read'),
   requirePermission(PERMISSIONS.ORDERS_VIEW_ASSIGNED),
   async (req, res) => {
     try {
@@ -671,6 +706,8 @@ router.get('/stats/chef',
 
 // Get delivery stats
 router.get('/stats/delivery',
+  requirePagePermission('staffDashboard', 'read'),
+  requirePagePermission('staffStats', 'read'),
   requirePermission(PERMISSIONS.ORDERS_VIEW_ASSIGNED),
   async (req, res) => {
     try {
@@ -715,6 +752,8 @@ router.get('/stats/delivery',
 // @route   GET /api/staff/orders/kitchen
 // @access  Private (cook, chef, admin)
 router.get('/orders/kitchen',
+  requireDashboardPage('read'),
+  requirePagePermission('staffOrdersCooking', 'read'),
   requirePermission(PERMISSIONS.ORDERS_VIEW),
   async (req, res) => {
     try {
@@ -739,6 +778,7 @@ router.get('/orders/kitchen',
 // @route   POST /api/staff/orders/:orderId/assign-chef
 // @access  Private (cook, chef, admin with write access to staffOrdersCooking)
 router.post('/orders/:orderId/assign-chef',
+  requireDashboardPage('write'),
   requirePagePermission('staffOrdersCooking', 'write'),
   async (req, res) => {
     try {
@@ -779,6 +819,7 @@ router.post('/orders/:orderId/assign-chef',
 // @route   POST /api/staff/orders/:orderId/assign-delivery
 // @access  Private (cook, chef, admin with write access to staffOrdersCooking)
 router.post('/orders/:orderId/assign-delivery',
+  requireDashboardPage('write'),
   requirePagePermission('staffOrdersCooking', 'write'),
   async (req, res) => {
     try {
@@ -818,5 +859,13 @@ router.post('/orders/:orderId/assign-delivery',
   }
 );
 
-module.exports = router;
+router.patch('/orders/:orderId/status',
+  requireDashboardPage('write'),
+  requirePagePermission('staffOrdersCooking', 'write'),
+  (req, res, next) => {
+    req.params.id = req.params.orderId;
+    return updateOrderStatus(req, res, next);
+  }
+);
 
+module.exports = router;

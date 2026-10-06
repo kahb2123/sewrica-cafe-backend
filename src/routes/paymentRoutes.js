@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const stripe = require('../config/stripe');
 const { protect } = require('../middleware/authMiddleware');
+const { requirePagePermission, requirePermission, requireRole } = require('../middleware/roleMiddleware');
+const { PERMISSIONS } = require('../config/roleMap');
 const Order = require('../models/Order');
 
 // @desc    Create payment intent for order
@@ -115,7 +117,12 @@ router.get('/payment-methods', protect, async (req, res) => {
 // @desc    Process cash payment (for cash on delivery)
 // @route   POST /api/payments/cash-payment
 // @access  Private (staff only)
-router.post('/cash-payment', protect, async (req, res) => {
+router.post('/cash-payment',
+  protect,
+  requireRole('admin', 'cashier'),
+  requirePagePermission('staffDashboard', 'write'),
+  requirePermission(PERMISSIONS.PAYMENTS_PROCESS),
+  async (req, res) => {
   try {
     const { orderId, amountReceived, change } = req.body;
 
@@ -141,7 +148,8 @@ router.post('/cash-payment', protect, async (req, res) => {
       success: true,
       message: 'Cash payment processed successfully',
       order
-    });
+      }
+    );
   } catch (error) {
     console.error('Cash payment error:', error);
     res.status(500).json({ message: 'Failed to process cash payment' });

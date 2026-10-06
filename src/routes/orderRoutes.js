@@ -14,6 +14,32 @@ const {
   refundPayment
 } = require('../controllers/orderController');
 const { protect } = require('../middleware/authMiddleware');
+const { requirePagePermission, requirePermission, requireRole } = require('../middleware/roleMiddleware');
+const { PERMISSIONS } = require('../config/roleMap');
+
+const requireOrderStatusPagePermission = (req, res, next) => {
+  const pagesByRole = {
+    admin: ['adminOrders'],
+    cashier: ['adminOrders'],
+    cook: ['staffDashboard', 'staffOrdersCooking'],
+    chef: ['staffDashboard', 'staffOrdersCooking'],
+    delivery: ['staffDashboard', 'staffOrdersDelivery'],
+  };
+  const requiredPages = pagesByRole[req.user.role];
+
+  if (!requiredPages) {
+    return res.status(403).json({ message: 'Access denied. Order status updates are not allowed for this role' });
+  }
+
+  const checkPage = (index) => {
+    if (index === requiredPages.length) {
+      return next();
+    }
+    return requirePagePermission(requiredPages[index], 'write')(req, res, () => checkPage(index + 1));
+  };
+
+  return checkPage(0);
+};
 
 // All order routes require authentication
 router.use(protect);
@@ -50,17 +76,27 @@ router.get('/:id/payment-status', getPaymentStatus);
 // @desc    Update order status (staff only)
 // @route   PATCH /api/orders/:id/status
 // @access  Private (admin, cashier, cook, delivery)
-router.patch('/:id/status', updateOrderStatus);
+router.patch('/:id/status', requireOrderStatusPagePermission, updateOrderStatus);
 
 // @desc    Process cash payment (staff only)
 // @route   POST /api/orders/:id/cash-payment
 // @access  Private (admin, cashier only)
-router.post('/:id/cash-payment', processCashPayment);
+router.post('/:id/cash-payment',
+  requireRole('admin', 'cashier'),
+  requirePagePermission('staffDashboard', 'write'),
+  requirePermission(PERMISSIONS.PAYMENTS_PROCESS),
+  processCashPayment
+);
 
 // @desc    Get orders by payment status (staff only)
 // @route   GET /api/orders/payment-status/:status
 // @access  Private (admin, cashier only)
-router.get('/payment-status/:status', getOrdersByPaymentStatus);
+router.get('/payment-status/:status',
+  requireRole('admin', 'cashier'),
+  requirePagePermission('staffDashboard', 'read'),
+  requirePermission(PERMISSIONS.PAYMENTS_VIEW),
+  getOrdersByPaymentStatus
+);
 
 // ========== PAYMENT CONFIRMATION ROUTES ==========
 
@@ -74,6 +110,10 @@ router.post('/:id/confirm-payment', confirmPayment);
 // @desc    Refund payment (admin only)
 // @route   POST /api/orders/:id/refund
 // @access  Private (admin only)
-router.post('/:id/refund', refundPayment);
+router.post('/:id/refund',
+  requireRole('admin'),
+  requirePagePermission('adminOrders', 'write'),
+  refundPayment
+);
 
 module.exports = router;

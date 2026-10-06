@@ -147,8 +147,8 @@ const mergePageAccessForUser = (user) => {
     const override = overrides[page];
     if (override) {
       merged[page] = {
-        canRead: !!override.canRead,
-        canWrite: !!override.canWrite,
+        canRead: override.canRead ?? base[page]?.canRead ?? false,
+        canWrite: override.canWrite ?? base[page]?.canWrite ?? false,
       };
     } else {
       merged[page] = {
