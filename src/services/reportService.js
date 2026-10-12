@@ -187,9 +187,7 @@ const getStaffPerformance = async (start, end, roleFilter) => {
           totalOrders: { $sum: 1 },
           completed: { $sum: { $cond: [{ $in: ['$status', ['ready', 'delivered']] }, 1, 0] } },
           cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
-          revenue: {
-            $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, { $ifNull: ['$totalAmount', 0] }, 0] }
-          },
+          revenue: { $sum: { $ifNull: ['$totalAmount', 0] } },
           avgCookingMinutes: { $avg: { $cond: [{ $gt: ['$cookingTime', 0] }, '$cookingTime', null] } }
         }
       }
@@ -202,9 +200,7 @@ const getStaffPerformance = async (start, end, roleFilter) => {
           totalOrders: { $sum: 1 },
           completed: { $sum: { $cond: [{ $eq: ['$status', 'delivered'] }, 1, 0] } },
           cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
-          revenue: {
-            $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, { $ifNull: ['$totalAmount', 0] }, 0] }
-          }
+          revenue: { $sum: { $ifNull: ['$totalAmount', 0] } }
         }
       }
     ]),
@@ -227,9 +223,7 @@ const getStaffPerformance = async (start, end, roleFilter) => {
           totalOrders: { $sum: 1 },
           completed: { $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, 1, 0] } },
           cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
-          revenue: {
-            $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, { $ifNull: ['$totalAmount', 0] }, 0] }
-          },
+          revenue: { $sum: { $ifNull: ['$totalAmount', 0] } },
           cashCollected: { $sum: { $ifNull: ['$amountReceived', 0] } }
         }
       }
@@ -251,9 +245,7 @@ const getStaffPerformance = async (start, end, roleFilter) => {
           totalOrders: { $sum: 1 },
           completed: { $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, 1, 0] } },
           cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
-          revenue: {
-            $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, { $ifNull: ['$totalAmount', 0] }, 0] }
-          }
+          revenue: { $sum: { $ifNull: ['$totalAmount', 0] } }
         }
       }
     ])
@@ -288,6 +280,7 @@ const getStaffPerformance = async (start, end, roleFilter) => {
         completionRate: row.totalOrders ? Math.round((row.completed / row.totalOrders) * 100) : 0
       };
     })
+    .filter((row) => row.totalOrders > 0)
     .filter((row) => !roleFilter || roleFilter === 'all' || row.role === roleFilter)
     .sort((a, b) => b.totalOrders - a.totalOrders);
 };
@@ -1062,7 +1055,7 @@ const buildPdf = (report, PDFDocument) => {
         { key: 'items', label: 'Items', width: 0.25 }
       ], recentOrders);
     } else if (report.staff.length) {
-      drawSectionTitle('Staff performance', 'Revenue is credited to whoever completed the assigned work');
+      drawSectionTitle('Staff performance', 'Order value is attributed to staff associated with each handled order');
       drawTable(
         [
           { key: 'name', label: 'Name', width: 0.28 },
