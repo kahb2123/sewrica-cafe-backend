@@ -29,11 +29,11 @@ router.post('/staff', async (req, res) => {
       });
     }
 
-    const validRoles = ['cook', 'delivery', 'cashier', 'supply_chain', 'admin'];
+    const validRoles = ['cook', 'delivery', 'cashier', 'waiter', 'supply_chain', 'admin'];
     if (!validRoles.includes(role)) {
       return res.status(400).json({ 
         success: false,
-        message: 'Invalid role. Must be one of: cook, delivery, cashier, supply_chain, admin'
+        message: 'Invalid role. Must be one of: cook, delivery, cashier, waiter, supply_chain, admin'
       });
     }
     
@@ -168,10 +168,10 @@ router.get('/staff', async (req, res) => {
     const { role } = req.query;
     let query = {};
     
-    if (role && ['cook', 'delivery', 'cashier', 'supply_chain', 'admin'].includes(role)) {
+    if (role && ['cook', 'delivery', 'cashier', 'waiter', 'supply_chain', 'admin'].includes(role)) {
       query.role = role;
     } else if (!role) {
-      query.role = { $in: ['cook', 'delivery', 'cashier', 'supply_chain', 'admin'] };
+      query.role = { $in: ['cook', 'delivery', 'cashier', 'waiter', 'supply_chain', 'admin'] };
     }
     
     const staff = await User.find(query)
@@ -494,7 +494,7 @@ router.put('/users/:id/role', async (req, res) => {
   try {
     const { role } = req.body;
 
-    if (!['customer', 'admin', 'cashier', 'cook', 'delivery', 'supply_chain'].includes(role)) {
+    if (!['customer', 'admin', 'cashier', 'cook', 'delivery', 'waiter', 'supply_chain'].includes(role)) {
       return res.status(400).json({ success: false, message: 'Invalid user role' });
     }
     
@@ -628,7 +628,7 @@ router.get('/reports/staff-performance', async (req, res) => {
         { $match: { ...match, assignedDelivery: { $ne: null } } },
         { $group: { _id: '$assignedDelivery', totalOrders: { $sum: 1 }, totalRevenue: { $sum: '$totalAmount' } } }
       ]),
-      User.find({ isActive: true, role: { $in: ['cook', 'delivery', 'cashier'] } }).lean()
+      User.find({ isActive: true, role: { $in: ['cook', 'delivery', 'cashier', 'waiter'] } }).lean()
     ]);
 
     const allStaffIds = new Set();
@@ -770,7 +770,7 @@ router.get('/reports/export', async (req, res) => {
           { $match: { ...staffFilter, assignedDelivery: { $ne: null } } },
           { $group: { _id: '$assignedDelivery', totalOrders: { $sum: 1 }, totalRevenue: { $sum: '$totalAmount' } } }
         ]),
-        User.find({ isActive: true, role: { $in: ['cook', 'delivery', 'cashier'] } }).lean()
+        User.find({ isActive: true, role: { $in: ['cook', 'delivery', 'cashier', 'waiter'] } }).lean()
       ]);
 
       const staffIdMap = new Map();

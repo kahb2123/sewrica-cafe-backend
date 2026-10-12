@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const {
   createOrder,
+  createStaffOrder,
   getUserOrders,
   getOrder,
   cancelOrder,
@@ -50,6 +51,16 @@ router.use(protect);
 // @route   POST /api/orders
 // @access  Private (authenticated users)
 router.post('/', createOrder);
+
+// @desc    Create and record an in-cafe order with payment in one staff action
+// @route   POST /api/orders/staff
+// @access  Private (waiter, delivery, admin)
+router.post('/staff',
+  requireRole('waiter', 'delivery', 'admin'),
+  requirePagePermission('staffOrderEntry', 'write'),
+  requirePermission(PERMISSIONS.ORDERS_CREATE),
+  createStaffOrder
+);
 
 // @desc    Get user's orders
 // @route   GET /api/orders/my-orders

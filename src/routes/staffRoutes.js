@@ -30,7 +30,7 @@ router.get('/:role',
   async (req, res) => {
   try {
     const { role } = req.params;
-    const validRoles = ['cook', 'delivery', 'cashier'];
+    const validRoles = ['cook', 'delivery', 'cashier', 'waiter'];
 
     if (!validRoles.includes(role)) {
       return res.status(400).json({ message: 'Invalid role' });

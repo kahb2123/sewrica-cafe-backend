@@ -2,6 +2,7 @@ const roleHierarchy = {
   customer: 0,
   supply_chain: 1,
   cashier: 2,
+  waiter: 2,
   delivery: 3,
   cook: 4,
   chef: 4,
@@ -9,6 +10,7 @@ const roleHierarchy = {
 };
 
 const PERMISSIONS = {
+  ORDERS_CREATE: 'orders:create',
   ORDERS_VIEW: 'orders:view',
   ORDERS_ALL: 'orders:all',
   ORDERS_ASSIGN_CHEF: 'orders:assign_chef',
@@ -54,7 +56,12 @@ const rolePermissions = {
     PERMISSIONS.STAFF_VIEW,
   ],
 
+  waiter: [
+    PERMISSIONS.ORDERS_CREATE,
+  ],
+
   delivery: [
+    PERMISSIONS.ORDERS_CREATE,
     PERMISSIONS.ORDERS_VIEW_ASSIGNED,
     PERMISSIONS.ORDERS_ACCEPT,
     PERMISSIONS.ORDERS_REJECT,
@@ -84,6 +91,9 @@ const rolePermissions = {
 const routePermissions = {
   '/api/staff/orders/cooking': {
     GET: [PERMISSIONS.ORDERS_VIEW_ASSIGNED, PERMISSIONS.ORDERS_ACCEPT],
+  },
+  '/api/orders/staff': {
+    POST: [PERMISSIONS.ORDERS_CREATE],
   },
   '/api/staff/orders/delivery': {
     GET: [PERMISSIONS.ORDERS_VIEW_ASSIGNED, PERMISSIONS.ORDERS_ACCEPT],
@@ -131,8 +141,12 @@ const routePermissions = {
 
 const PAGE_ACCESS = {
   staffDashboard: {
-    read: ['cook', 'chef', 'delivery', 'cashier', 'admin'],
-    write: ['cook', 'chef', 'delivery', 'cashier', 'admin'],
+    read: ['cook', 'chef', 'delivery', 'cashier', 'waiter', 'admin'],
+    write: ['cook', 'chef', 'delivery', 'cashier', 'waiter', 'admin'],
+  },
+  staffOrderEntry: {
+    read: ['waiter', 'delivery', 'admin'],
+    write: ['waiter', 'delivery', 'admin'],
   },
   staffOrdersCooking: {
     read: ['cook', 'chef', 'admin'],
@@ -147,8 +161,8 @@ const PAGE_ACCESS = {
     write: ['admin'],
   },
   staffProfile: {
-    read: ['cook', 'chef', 'delivery', 'cashier', 'admin'],
-    write: ['cook', 'chef', 'delivery', 'cashier', 'admin'],
+    read: ['cook', 'chef', 'delivery', 'cashier', 'waiter', 'admin'],
+    write: ['cook', 'chef', 'delivery', 'cashier', 'waiter', 'admin'],
   },
   adminDashboard: {
     read: ['admin', 'supply_chain'],

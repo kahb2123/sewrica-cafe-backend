@@ -15,7 +15,7 @@ const REPORT_TIMEZONE = process.env.REPORT_TIMEZONE || '+03:00';
 const TZ_OFFSET_HOURS = Number(process.env.BUSINESS_TZ_OFFSET_HOURS ?? 3);
 
 const PAID = 'completed';
-const STAFF_ROLES = ['cook', 'delivery', 'cashier'];
+const STAFF_ROLES = ['cook', 'delivery', 'cashier', 'waiter'];
 
 const MS_PER_HOUR = 60 * 60 * 1000;
 
@@ -178,7 +178,7 @@ const getOrderFacets = async (start, end) => {
 const getStaffPerformance = async (start, end, roleFilter) => {
   const range = { createdAt: { $gte: start, $lt: end } };
 
-  const [chefs, delivery, cashiers] = await Promise.all([
+  const [chefs, delivery, cashiers, waiters] = await Promise.all([
     Order.aggregate([
       { $match: { ...range, assignedChef: { $ne: null } } },
       {
@@ -213,6 +213,15 @@ const getStaffPerformance = async (start, end, roleFilter) => {
       // paid order, so every cashier was credited with the whole cafe's revenue.
       { $match: { ...range, processedBy: { $ne: null } } },
       {
+        $lookup: {
+          from: 'users',
+          localField: 'processedBy',
+          foreignField: '_id',
+          as: 'processor'
+        }
+      },
+      { $match: { 'processor.role': 'cashier' } },
+      {
         $group: {
           _id: '$processedBy',
           totalOrders: { $sum: 1 },
@@ -224,13 +233,37 @@ const getStaffPerformance = async (start, end, roleFilter) => {
           cashCollected: { $sum: { $ifNull: ['$amountReceived', 0] } }
         }
       }
+    ]),
+    Order.aggregate([
+      { $match: { ...range, createdBy: { $ne: null } } },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'createdBy',
+          foreignField: '_id',
+          as: 'creator'
+        }
+      },
+      { $match: { 'creator.role': 'waiter' } },
+      {
+        $group: {
+          _id: '$createdBy',
+          totalOrders: { $sum: 1 },
+          completed: { $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, 1, 0] } },
+          cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
+          revenue: {
+            $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, { $ifNull: ['$totalAmount', 0] }, 0] }
+          }
+        }
+      }
     ])
   ]);
 
   const rows = [
     ...chefs.map((row) => ({ ...row, role: 'cook' })),
     ...delivery.map((row) => ({ ...row, role: 'delivery' })),
-    ...cashiers.map((row) => ({ ...row, role: 'cashier' }))
+    ...cashiers.map((row) => ({ ...row, role: 'cashier' })),
+    ...waiters.map((row) => ({ ...row, role: 'waiter' }))
   ];
 
   const members = await User.find(
@@ -267,6 +300,7 @@ const getStaffPerformance = async (start, end, roleFilter) => {
  *   chef     -> orders the admin assigned via assignedChef
  *   delivery -> orders the admin assigned via assignedDelivery
  *   cashier  -> orders whose payment this person took via processedBy
+ *   waiter   -> in-cafe orders this person created via createdBy
  */
 const getStaffDetail = async (staffId, start, end) => {
   const range = { createdAt: { $gte: start, $lt: end } };
@@ -279,7 +313,9 @@ const getStaffDetail = async (staffId, start, end) => {
     ? 'assignedChef'
     : role === 'delivery'
       ? 'assignedDelivery'
-      : 'processedBy';
+      : role === 'waiter'
+        ? 'createdBy'
+        : 'processedBy';
 
   // Aggregation pipelines do not cast string IDs to ObjectIds like Mongoose
   // queries do. Use the ObjectId from the loaded staff document for both paths.

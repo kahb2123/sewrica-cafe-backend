@@ -1,5 +1,6 @@
 // src/controllers/orderController.js
 const crypto = require('crypto');
+const mongoose = require('mongoose');
 const Order = require('../models/Order');
 const User = require('../models/User');
 const MenuItem = require('../models/MenuItem');
@@ -175,6 +176,160 @@ const createOrder = async (req, res) => {
   } catch (error) {
     console.error('Create order error:', error);
     res.status(500).json({ message: 'Failed to create order', error: error.message });
+  }
+};
+
+const createStaffOrder = async (req, res) => {
+  try {
+    const { items, paymentMethod, deliveryMethod, customerInfo = {}, deliveryAddress = {} } = req.body;
+    const validPaymentMethods = ['cash', 'card', 'tele_birr', 'bank'];
+    const customerDetails = customerInfo && typeof customerInfo === 'object' ? customerInfo : {};
+    const addressDetails = deliveryAddress && typeof deliveryAddress === 'object' ? deliveryAddress : {};
+    const customerName = typeof customerDetails.name === 'string' ? customerDetails.name.trim() : '';
+    const customerPhone = typeof customerDetails.phone === 'string' ? customerDetails.phone.trim() : '';
+    const street = typeof addressDetails.street === 'string' ? addressDetails.street.trim() : '';
+    const area = typeof addressDetails.area === 'string' ? addressDetails.area.trim() : '';
+    const city = typeof addressDetails.city === 'string' ? addressDetails.city.trim() : '';
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ message: 'Order must contain at least one item' });
+    }
+    if (!validPaymentMethods.includes(paymentMethod)) {
+      return res.status(400).json({ message: 'Select a valid payment method' });
+    }
+    if (!['delivery', 'pickup'].includes(deliveryMethod)) {
+      return res.status(400).json({ message: 'Select a valid order type' });
+    }
+    if (deliveryMethod === 'delivery' && (!customerName || !customerPhone || !street)) {
+      return res.status(400).json({ message: 'Customer name, phone, and delivery address are required for delivery orders' });
+    }
+
+    const requestedQuantities = new Map();
+    for (const item of items) {
+      if (!item || typeof item !== 'object') {
+        return res.status(400).json({ message: 'Order contains an invalid menu item' });
+      }
+      const quantity = Number(item.quantity);
+      const itemId = String(item.menuItem || '');
+      if (!mongoose.Types.ObjectId.isValid(itemId)) {
+        return res.status(400).json({ message: 'Order contains an invalid menu item' });
+      }
+      if (!Number.isInteger(quantity) || quantity < 1) {
+        return res.status(400).json({ message: 'Each item quantity must be a whole number greater than 0' });
+      }
+      requestedQuantities.set(itemId, (requestedQuantities.get(itemId) || 0) + quantity);
+    }
+
+    const menuItems = new Map();
+    for (const itemId of requestedQuantities.keys()) {
+      const menuItem = await MenuItem.findById(itemId);
+      if (!menuItem || !menuItem.isAvailable) {
+        return res.status(400).json({ message: 'One or more selected items are unavailable' });
+      }
+      menuItems.set(itemId, menuItem);
+    }
+
+    const orderItems = [];
+    let subtotal = 0;
+    for (const [itemId, quantity] of requestedQuantities) {
+      const menuItem = menuItems.get(itemId);
+      subtotal += menuItem.price * quantity;
+      orderItems.push({
+        menuItem: menuItem._id,
+        name: menuItem.name,
+        category: menuItem.category || 'other',
+        quantity,
+        price: menuItem.price
+      });
+    }
+
+    const now = new Date();
+    let order;
+    for (let attempt = 0; attempt < ORDER_NUMBER_MAX_ATTEMPTS; attempt++) {
+      try {
+        const orderNumber = await generateOrderNumber();
+        order = await Order.create({
+          orderNumber,
+          customer: null,
+          createdBy: req.user._id,
+          customerName: customerName || 'Walk-in customer',
+          customerPhone,
+          customerEmail: '',
+          items: orderItems,
+          subtotal,
+          totalAmount: subtotal,
+          paymentMethod,
+          paymentStatus: 'completed',
+          deliveryMethod,
+          deliveryTime: 'asap',
+          deliveryAddress: deliveryMethod === 'delivery' ? { street, area, city } : undefined,
+          status: 'pending',
+          orderSource: 'walk-in',
+          processedBy: req.user._id,
+          processedByName: req.user.name || '',
+          processedAt: now,
+          paidAt: now,
+          amountReceived: paymentMethod === 'cash' ? subtotal : undefined,
+          change: paymentMethod === 'cash' ? 0 : undefined,
+          assignedDelivery: deliveryMethod === 'delivery' && req.user.role === 'delivery'
+            ? req.user._id
+            : null,
+          assignedAt: deliveryMethod === 'delivery' && req.user.role === 'delivery'
+            ? { delivery: now }
+            : undefined,
+          lotteryEligible: false,
+          statusHistory: [{
+            status: 'pending',
+            changedBy: req.user._id,
+            changedAt: now,
+            notes: `In-cafe order placed and paid by ${req.user.name || req.user.role}`
+          }]
+        });
+        break;
+      } catch (error) {
+        const duplicateOrderNumber =
+          error?.code === 11000 && error.keyPattern?.orderNumber;
+        if (!duplicateOrderNumber || attempt === ORDER_NUMBER_MAX_ATTEMPTS - 1) {
+          throw error;
+        }
+      }
+    }
+
+    const io = req.app.get('io');
+    if (io) {
+      let recipients = io.to('staff-admin').to('staff-cashier').to('staff-cook');
+      if (order.assignedDelivery) {
+        recipients = recipients.to(`delivery-${order.assignedDelivery}`);
+      }
+      recipients.emit('new-order', {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        customerName: order.customerName,
+        totalAmount: order.totalAmount,
+        createdAt: order.createdAt,
+        paymentStatus: order.paymentStatus,
+        orderSource: order.orderSource
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: 'Order placed and marked as paid',
+      order: {
+        _id: order._id,
+        orderNumber: order.orderNumber,
+        items: order.items,
+        subtotal: order.subtotal,
+        totalAmount: order.totalAmount,
+        status: order.status,
+        paymentMethod: order.paymentMethod,
+        paymentStatus: order.paymentStatus,
+        createdAt: order.createdAt
+      }
+    });
+  } catch (error) {
+    console.error('Create staff order error:', error);
+    return res.status(500).json({ message: 'Failed to place order' });
   }
 };
 
@@ -809,6 +964,7 @@ const generateOrderNumber = async () => {
 // Export all functions
 module.exports = {
   createOrder,
+  createStaffOrder,
   getUserOrders,
   getOrder,
   cancelOrder,
