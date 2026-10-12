@@ -269,6 +269,7 @@ const createStaffOrder = async (req, res) => {
           processedByName: req.user.name || '',
           processedAt: now,
           paidAt: now,
+          lotteryTicketNumber: `staff-${crypto.randomUUID()}`,
           amountReceived: paymentMethod === 'cash' ? subtotal : undefined,
           change: paymentMethod === 'cash' ? 0 : undefined,
           assignedDelivery: deliveryMethod === 'delivery' && req.user.role === 'delivery'
@@ -328,7 +329,13 @@ const createStaffOrder = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Create staff order error:', error);
+    console.error('Create staff order error:', error.stack || error);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ message: error.message });
+    }
+    if (error.code === 11000) {
+      return res.status(409).json({ message: 'Order could not be saved because of a duplicate value. Please retry.' });
+    }
     return res.status(500).json({ message: 'Failed to place order' });
   }
 };
@@ -952,13 +959,12 @@ const refundPayment = async (req, res) => {
   }
 };
 
-// Helper function to generate a unique 5-digit order number
+// Generate a fresh four-digit candidate on every retry.
 const ORDER_NUMBER_LENGTH = 4;
 const ORDER_NUMBER_MAX_ATTEMPTS = 25;
 
-const generateOrderNumber = async () => {
-  const count = await Order.countDocuments({});
-  return String(count).padStart(ORDER_NUMBER_LENGTH, '0');
+const generateOrderNumber = () => {
+  return String(crypto.randomInt(0, 10 ** ORDER_NUMBER_LENGTH)).padStart(ORDER_NUMBER_LENGTH, '0');
 };
 
 // Export all functions
