@@ -26,7 +26,7 @@ const menuItemSchema = new mongoose.Schema({
   category: {
     type: String,
     required: true,
-    enum: ['burgers', 'sandwiches', 'fastfood', 'pizza', 'wraps', 'fetira', 'traditional', 'beverages', 'desserts']
+    enum: ['burgers', 'sandwiches', 'fastfood', 'pizza', 'wraps', 'fetira', 'traditional', 'beverages', 'soft-drinks', 'hot-drinks', 'desserts']
   },
   image: {
     type: String,

@@ -348,6 +348,11 @@ const toggleAvailability = async (req, res) => {
 const getAllCategories = async (req, res) => {
   try {
     const categories = await MenuItem.distinct('category', {}, { maxTimeMS: 30000 });
+    for (const category of ['soft-drinks', 'hot-drinks']) {
+      if (!categories.includes(category)) {
+        categories.push(category);
+      }
+    }
     
     res.json({
       success: true,
