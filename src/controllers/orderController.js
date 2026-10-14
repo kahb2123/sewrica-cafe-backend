@@ -2,6 +2,7 @@
 const crypto = require('crypto');
 const mongoose = require('mongoose');
 const Order = require('../models/Order');
+const Counter = require('../models/Counter');
 const User = require('../models/User');
 const MenuItem = require('../models/MenuItem');
 const LotteryService = require('../services/lotteryService');
@@ -959,12 +960,47 @@ const refundPayment = async (req, res) => {
   }
 };
 
-// Generate a fresh four-digit candidate on every retry.
+// Keep new numbers above the highest order number from before the counter existed.
+const ORDER_NUMBER_COUNTER_ID = 'orderNumber';
 const ORDER_NUMBER_LENGTH = 4;
 const ORDER_NUMBER_MAX_ATTEMPTS = 25;
 
-const generateOrderNumber = () => {
-  return String(crypto.randomInt(0, 10 ** ORDER_NUMBER_LENGTH)).padStart(ORDER_NUMBER_LENGTH, '0');
+const initializeOrderNumberCounter = async () => {
+  const counterExists = await Counter.exists({ _id: ORDER_NUMBER_COUNTER_ID });
+  if (counterExists) {
+    return;
+  }
+
+  const [latestOrder] = await Order.aggregate([
+    { $match: { orderNumber: /^\d+$/ } },
+    { $project: { orderNumberValue: { $toLong: '$orderNumber' } } },
+    { $sort: { orderNumberValue: -1 } },
+    { $limit: 1 }
+  ]);
+  const initialSequence = latestOrder ? Number(latestOrder.orderNumberValue) : 0;
+
+  try {
+    await Counter.create({ _id: ORDER_NUMBER_COUNTER_ID, sequence: initialSequence });
+  } catch (error) {
+    if (error.code !== 11000) {
+      throw error;
+    }
+  }
+};
+
+const generateOrderNumber = async () => {
+  await initializeOrderNumberCounter();
+  const counter = await Counter.findOneAndUpdate(
+    { _id: ORDER_NUMBER_COUNTER_ID },
+    { $inc: { sequence: 1 } },
+    { new: true }
+  );
+
+  if (!counter) {
+    throw new Error('Failed to allocate the next order number');
+  }
+
+  return String(counter.sequence).padStart(ORDER_NUMBER_LENGTH, '0');
 };
 
 // Export all functions
