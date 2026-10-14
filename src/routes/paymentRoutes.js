@@ -1,26 +1,30 @@
 const express = require('express');
 const router = express.Router();
 const stripe = require('../config/stripe');
-const { protect } = require('../middleware/authMiddleware');
+const { protect, optionalProtect } = require('../middleware/authMiddleware');
 const { requirePagePermission, requirePermission, requireRole } = require('../middleware/roleMiddleware');
 const { PERMISSIONS } = require('../config/roleMap');
 const Order = require('../models/Order');
+const { guestTokenMatches } = require('../utils/orderAccess');
 
 // @desc    Create payment intent for order
 // @route   POST /api/payments/create-payment-intent
 // @access  Private
-router.post('/create-payment-intent', protect, async (req, res) => {
+router.post('/create-payment-intent', optionalProtect, async (req, res) => {
   try {
     const { orderId, paymentMethodId } = req.body;
 
     // Find the order
-    const order = await Order.findById(orderId);
+    const order = await Order.findById(orderId).select('+guestAccessTokenHash');
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
 
     // Check if user owns this order
-    if (order.customer.toString() !== req.user._id.toString()) {
+    const isOwner = req.user && order.customer &&
+      order.customer.toString() === req.user._id.toString();
+    const hasGuestAccess = guestTokenMatches(order, req.headers['x-order-access-token']);
+    if (!isOwner && !hasGuestAccess) {
       return res.status(403).json({ message: 'Not authorized to pay for this order' });
     }
 
@@ -33,8 +37,8 @@ router.post('/create-payment-intent', protect, async (req, res) => {
     const paymentIntent = await stripe.paymentIntents.create({
       amount: Math.round(order.totalAmount * 100), // Convert to cents
       currency: 'usd', // You can change this to ETB when available
-      payment_method: paymentMethodId,
-      confirm: true,
+      ...(paymentMethodId && { payment_method: paymentMethodId }),
+      confirm: Boolean(paymentMethodId),
       automatic_payment_methods: {
         enabled: true,
       },
@@ -43,7 +47,7 @@ router.post('/create-payment-intent', protect, async (req, res) => {
         orderNumber: order.orderNumber,
         customerEmail: order.customerEmail,
       },
-      receipt_email: order.customerEmail,
+      ...(order.customerEmail && { receipt_email: order.customerEmail }),
     });
 
     // Update order with payment intent ID

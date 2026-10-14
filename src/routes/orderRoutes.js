@@ -14,7 +14,7 @@ const {
   getPaymentStatus,
   refundPayment
 } = require('../controllers/orderController');
-const { protect } = require('../middleware/authMiddleware');
+const { protect, optionalProtect } = require('../middleware/authMiddleware');
 const { requirePagePermission, requirePermission, requireRole } = require('../middleware/roleMiddleware');
 const { PERMISSIONS } = require('../config/roleMap');
 
@@ -42,15 +42,26 @@ const requireOrderStatusPagePermission = (req, res, next) => {
   return checkPage(0);
 };
 
-// All order routes require authentication
-router.use(protect);
-
 // ========== CUSTOMER ROUTES ==========
 
 // @desc    Create new order
 // @route   POST /api/orders
-// @access  Private (authenticated users)
-router.post('/', createOrder);
+// @access  Public (guest checkout) or authenticated customer
+router.post('/', optionalProtect, createOrder);
+
+// @desc    Get user's orders
+// @route   GET /api/orders/my-orders
+// @access  Private
+router.get('/my-orders', protect, getUserOrders);
+
+// @desc    Get single order
+// @route   GET /api/orders/:id
+// @access  Private (owner/staff) or guest with order access token
+router.get('/:id', optionalProtect, getOrder);
+router.post('/:id/confirm-payment', optionalProtect, confirmPayment);
+
+// Staff and remaining customer routes require authentication.
+router.use(protect);
 
 // @desc    Create and record an in-cafe order with payment in one staff action
 // @route   POST /api/orders/staff
@@ -61,16 +72,6 @@ router.post('/staff',
   requirePermission(PERMISSIONS.ORDERS_CREATE),
   createStaffOrder
 );
-
-// @desc    Get user's orders
-// @route   GET /api/orders/my-orders
-// @access  Private
-router.get('/my-orders', getUserOrders);
-
-// @desc    Get single order
-// @route   GET /api/orders/:id
-// @access  Private (order owner or admin)
-router.get('/:id', getOrder);
 
 // @desc    Cancel order
 // @route   PATCH /api/orders/:id/cancel
@@ -114,8 +115,6 @@ router.get('/payment-status/:status',
 // @desc    Confirm order after successful card payment
 // @route   POST /api/orders/:id/confirm-payment
 // @access  Private (customer who placed the order)
-router.post('/:id/confirm-payment', confirmPayment);
-
 // ========== ADMIN ONLY ROUTES ==========
 
 // @desc    Refund payment (admin only)

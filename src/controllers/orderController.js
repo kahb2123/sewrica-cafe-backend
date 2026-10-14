@@ -3,9 +3,15 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 const Order = require('../models/Order');
 const Counter = require('../models/Counter');
+const stripe = require('../config/stripe');
 const User = require('../models/User');
 const MenuItem = require('../models/MenuItem');
 const LotteryService = require('../services/lotteryService');
+const {
+  createGuestAccessToken,
+  hashGuestAccessToken,
+  guestTokenMatches
+} = require('../utils/orderAccess');
 
 // @desc    Create new order
 // @route   POST /api/orders
@@ -34,8 +40,9 @@ const createOrder = async (req, res) => {
       return res.status(400).json({ message: 'Payment method and delivery method are required' });
     }
 
-    // Get user from token
+    // A signed-in customer is attached by optionalProtect; guest checkout is also allowed.
     const user = req.user;
+    const guestAccessToken = user ? null : createGuestAccessToken();
 
     // Validate and calculate order items
     let subtotal = 0;
@@ -80,19 +87,10 @@ const createOrder = async (req, res) => {
 
     const totalAmount = subtotal;
 
-    let paymentStatus = 'pending';
-    if (paymentMethod === 'card') {
-      paymentStatus = 'processing';
-    } else if (paymentMethod === 'cash') {
-      paymentStatus = 'pending';
-    } else if (paymentMethod === 'tele_birr') {
-      paymentStatus = 'pending';
-    } else if (paymentMethod === 'bank') {
-      paymentStatus = 'pending';
-    }
+    const paymentStatus = 'pending';
 
     // ========== GENERATE LOTTERY TICKET NUMBER ==========
-    const lotteryTicketNumber = LotteryService.generateTicketNumber(user._id);
+    const lotteryTicketNumber = LotteryService.generateTicketNumber();
 
     // Create order with initial status, retrying if the 5-digit number is already taken
     let order;
@@ -102,16 +100,27 @@ const createOrder = async (req, res) => {
         currentOrderNumber = await generateOrderNumber();
         order = await Order.create({
           orderNumber: currentOrderNumber,
-        customer: user._id,
+        customer: user?._id || null,
+        guestAccessTokenHash: guestAccessToken
+          ? hashGuestAccessToken(guestAccessToken)
+          : undefined,
         customerName: customerInfo.name,
         customerPhone: customerInfo.phone,
-        customerEmail: customerInfo.email || user.email,
+        customerEmail: customerInfo.email || user?.email || '',
         items: orderItems,
         subtotal,
         totalAmount,
         paymentMethod,
         paymentStatus,
         deliveryMethod,
+        deliveryAddress: deliveryMethod === 'delivery' ? {
+          street: customerInfo.address || customerInfo.area || '',
+          area: customerInfo.area || '',
+          building: customerInfo.building || '',
+          floor: customerInfo.floor || '',
+          city: customerInfo.city || '',
+          additionalInfo: customerInfo.additionalInfo || ''
+        } : undefined,
         deliveryTime: deliveryTime || 'asap',
         specialRequests: specialInstructions || '',
         status: 'pending',
@@ -124,7 +133,7 @@ const createOrder = async (req, res) => {
         // Initialize status history
         statusHistory: [{
           status: 'pending',
-          changedBy: user._id,
+          changedBy: user?._id,
           changedAt: new Date(),
           notes: `Order placed - Lottery Ticket: ${lotteryTicketNumber}`
         }]
@@ -171,7 +180,8 @@ const createOrder = async (req, res) => {
         paymentStatus: order.paymentStatus,
         createdAt: order.createdAt,
         lotteryTicketNumber: order.lotteryTicketNumber
-      }
+      },
+      ...(guestAccessToken && { orderAccessToken: guestAccessToken })
     });
 
   } catch (error) {
@@ -585,6 +595,7 @@ const getUserOrders = async (req, res) => {
 const getOrder = async (req, res) => {
   try {
     const order = await Order.findById(req.params.id)
+      .select('+guestAccessTokenHash')
       .populate('items.menuItem')
       .populate('customer', 'name email phone');
 
@@ -593,8 +604,12 @@ const getOrder = async (req, res) => {
     }
 
     // Check if user owns this order or is admin/staff
-    if (order.customer._id.toString() !== req.user._id.toString() && 
-        !['admin', 'cashier', 'cook', 'delivery'].includes(req.user.role)) {
+    const isOwner = req.user && order.customer &&
+      order.customer._id.toString() === req.user._id.toString();
+    const isStaff = req.user &&
+      ['admin', 'cashier', 'cook', 'delivery'].includes(req.user.role);
+    const hasGuestAccess = guestTokenMatches(order, req.headers['x-order-access-token']);
+    if (!isOwner && !isStaff && !hasGuestAccess) {
       return res.status(403).json({ message: 'Not authorized to view this order' });
     }
 
@@ -690,6 +705,13 @@ const confirmPayment = async (req, res) => {
       return res.status(404).json({ message: 'Order not found' });
     }
 
+    const isOwner = req.user && order.customer &&
+      order.customer.toString() === req.user._id.toString();
+    const hasGuestAccess = guestTokenMatches(order, req.headers['x-order-access-token']);
+    if (!isOwner && !hasGuestAccess) {
+      return res.status(403).json({ message: 'Not authorized to confirm payment for this order' });
+    }
+
     // Verify this is a card order
     if (order.paymentMethod !== 'card') {
       return res.status(400).json({ message: 'Not a card payment order' });
@@ -700,12 +722,24 @@ const confirmPayment = async (req, res) => {
       return res.status(400).json({ message: 'Order already paid' });
     }
 
+    if (!paymentIntentId || order.stripePaymentIntentId !== paymentIntentId) {
+      return res.status(400).json({ message: 'Payment intent does not match this order' });
+    }
+
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    if (
+      paymentIntent.status !== 'succeeded' ||
+      paymentIntent.metadata.orderId !== order._id.toString() ||
+      paymentIntent.amount !== Math.round(order.totalAmount * 100)
+    ) {
+      return res.status(400).json({ message: 'Payment has not been successfully verified' });
+    }
+
     // Update order
     order.paymentStatus = 'completed';
-    order.stripePaymentIntentId = paymentIntentId;
     order.paidAt = new Date();
-    order.processedBy = req.user._id;
-    order.processedByName = req.user.name || '';
+    order.processedBy = req.user?._id || null;
+    order.processedByName = req.user?.name || '';
     order.processedAt = order.paidAt;
     await order.save();
 

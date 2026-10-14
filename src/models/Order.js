@@ -36,6 +36,10 @@ const orderSchema = new mongoose.Schema({
     ref: 'User',
     default: null
   },
+  guestAccessTokenHash: {
+    type: String,
+    select: false
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

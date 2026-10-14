@@ -31,6 +31,15 @@ const protect = async (req, res, next) => {
   }
 };
 
+const optionalProtect = async (req, res, next) => {
+  const authorization = req.headers.authorization;
+  if (!authorization || !authorization.startsWith('Bearer ')) {
+    return next();
+  }
+
+  return protect(req, res, next);
+};
+
 // Role-based authorization
 const authorize = (...roles) => {
   return (req, res, next) => {
@@ -76,4 +85,4 @@ const isAdminOrOwner = (resourceUserId) => {
   };
 };
 
-module.exports = { protect, authorize, adminOnly, isAdminOrOwner };
+module.exports = { protect, optionalProtect, authorize, adminOnly, isAdminOrOwner };
