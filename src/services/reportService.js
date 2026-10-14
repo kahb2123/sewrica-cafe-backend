@@ -375,7 +375,7 @@ const getStaffDetail = async (staffId, start, end) => {
     Order.find(match)
       .sort({ createdAt: -1 })
       .limit(60)
-      .select('orderNumber items status paymentStatus paymentMethod totalAmount createdAt cookingStartedAt cookingCompletedAt cookingTime deliveryCompletedAt assignedAt')
+      .select('orderNumber dailyOrderNumber items status paymentStatus paymentMethod totalAmount createdAt cookingStartedAt cookingCompletedAt cookingTime deliveryCompletedAt assignedAt')
       .lean(),
     Order.findOne({ [assignmentField]: staffId })
       .sort({ createdAt: 1 })
@@ -440,7 +440,7 @@ const getStaffDetail = async (staffId, start, end) => {
     }])),
     orders: orders.map((order) => ({
       orderId: order._id,
-      orderNumber: order.orderNumber,
+      orderNumber: order.dailyOrderNumber || order.orderNumber,
       status: order.status,
       paymentStatus: order.paymentStatus,
       paymentMethod: order.paymentMethod,
@@ -662,7 +662,7 @@ const buildCsv = (report) => {
         ['RECENT ORDERS (UP TO 60)'],
         ['Order #', 'Date', 'Status', 'Payment status', 'Amount (ETB)', 'Items'],
         ...(detail.orders || []).map((order) => [
-          order.orderNumber,
+          order.dailyOrderNumber || order.orderNumber,
           order.createdAt ? new Date(order.createdAt).toISOString() : '',
           order.status,
           order.paymentStatus,
@@ -1038,7 +1038,7 @@ const buildPdf = (report, PDFDocument) => {
       ], dailyRows);
 
       const recentOrders = (detail.orders || []).map((order) => ({
-        orderNumber: order.orderNumber || '—',
+        orderNumber: order.dailyOrderNumber || order.orderNumber || '—',
         date: order.createdAt ? new Date(order.createdAt).toLocaleDateString('en-GB') : '—',
         status: order.status || '—',
         payment: order.paymentStatus || '—',

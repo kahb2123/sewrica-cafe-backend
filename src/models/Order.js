@@ -31,6 +31,14 @@ const orderSchema = new mongoose.Schema({
     required: true,
     unique: true
   },
+  dailyOrderNumber: {
+    type: String,
+    match: /^\d{4}$/
+  },
+  orderDateKey: {
+    type: String,
+    match: /^\d{8}$/
+  },
   customer: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -255,7 +263,15 @@ orderSchema.virtual('totalItems').get(function() {
   return this.items.reduce((total, item) => total + item.quantity, 0);
 });
 
-orderSchema.set('toJSON', { virtuals: true });
+orderSchema.set('toJSON', {
+  virtuals: true,
+  transform: (doc, result) => {
+    if (result.dailyOrderNumber) {
+      result.orderNumber = result.dailyOrderNumber;
+    }
+    return result;
+  }
+});
 orderSchema.set('toObject', { virtuals: true });
 
 // Indexes

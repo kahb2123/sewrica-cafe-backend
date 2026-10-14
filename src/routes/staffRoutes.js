@@ -203,14 +203,14 @@ router.post('/orders/:orderId/chef-accept',
       if (io) {
         io.to('staff-admin').emit('chef-accepted', {
           orderId: order._id,
-          orderNumber: order.orderNumber,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
           chefName: req.user.name,
           acceptedAt: order.chefAcceptedAt
         });
 
         io.to(`order-${order._id}`).emit('order-status-updated', {
           orderId: order._id,
-          orderNumber: order.orderNumber,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
           status: 'preparing',
           message: `Chef ${req.user.name} has started preparing your order!`,
           updatedAt: new Date()
@@ -262,7 +262,7 @@ router.post('/orders/:orderId/chef-reject',
       if (io) {
         io.to('staff-admin').emit('chef-rejected', {
           orderId: order._id,
-          orderNumber: order.orderNumber,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
           chefName: req.user.name,
           reason,
           rejectedAt: order.chefRejectedAt
@@ -270,7 +270,7 @@ router.post('/orders/:orderId/chef-reject',
 
         io.to(`order-${order._id}`).emit('order-status-updated', {
           orderId: order._id,
-          orderNumber: order.orderNumber,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
           status: 'cancelled',
           message: `Your order has been rejected. Reason: ${reason}`,
           updatedAt: new Date()
@@ -327,14 +327,14 @@ router.post('/orders/:orderId/delivery-accept',
       if (io) {
         io.to('staff-admin').emit('delivery-accepted', {
           orderId: order._id,
-          orderNumber: order.orderNumber,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
           deliveryName: req.user.name,
           acceptedAt: order.deliveryAcceptedAt
         });
 
         io.to(`order-${order._id}`).emit('order-status-updated', {
           orderId: order._id,
-          orderNumber: order.orderNumber,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
           status: 'ready',
           message: `${req.user.name} accepted your delivery and will be on the way soon!`,
           updatedAt: new Date()
@@ -386,7 +386,7 @@ router.post('/orders/:orderId/delivery-reject',
       if (io) {
         io.to('staff-admin').emit('delivery-rejected', {
           orderId: order._id,
-          orderNumber: order.orderNumber,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
           deliveryName: req.user.name,
           reason,
           rejectedAt: order.deliveryRejectedAt
@@ -394,7 +394,7 @@ router.post('/orders/:orderId/delivery-reject',
 
         io.to(`order-${order._id}`).emit('order-status-updated', {
           orderId: order._id,
-          orderNumber: order.orderNumber,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
           status: 'cancelled',
           message: `Your delivery has been rejected. Reason: ${reason}`,
           updatedAt: new Date()
@@ -445,14 +445,14 @@ router.post('/start-cooking/:orderId',
       if (io) {
         io.to('staff-admin').emit('cooking-started', {
           orderId: order._id,
-          orderNumber: order.orderNumber,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
           chefName: req.user.name,
           startedAt: order.cookingStartedAt
         });
 
         io.to(`order-${order._id}`).emit('order-status-updated', {
           orderId: order._id,
-          orderNumber: order.orderNumber,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
           status: 'cooking',
           message: 'Your order is being cooked!',
           updatedAt: new Date()
@@ -513,14 +513,14 @@ router.post('/complete-cooking/:orderId',
       if (io) {
         io.to('staff-admin').to('staff-delivery').emit('order-ready', {
           orderId: order._id,
-          orderNumber: order.orderNumber,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
           cookingTime: order.cookingTime,
           completedAt: order.cookingCompletedAt
         });
 
         io.to(`order-${order._id}`).emit('order-status-updated', {
           orderId: order._id,
-          orderNumber: order.orderNumber,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
           status: 'ready',
           message: 'Your order is ready for pickup/delivery!',
           updatedAt: new Date()
@@ -578,14 +578,14 @@ router.post('/start-delivery/:orderId',
       if (io) {
         io.to('staff-admin').emit('delivery-started', {
           orderId: order._id,
-          orderNumber: order.orderNumber,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
           deliveryName: req.user.name,
           startedAt: order.deliveryStartedAt
         });
 
         io.to(`order-${order._id}`).emit('order-status-updated', {
           orderId: order._id,
-          orderNumber: order.orderNumber,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
           status: 'out-for-delivery',
           message: 'Your order is on the way!',
           updatedAt: new Date()
@@ -638,7 +638,7 @@ router.post('/complete-delivery/:orderId',
       if (io) {
         io.to('staff-admin').emit('order-delivered', {
           orderId: order._id,
-          orderNumber: order.orderNumber,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
           deliveryName: req.user.name,
           deliveryTime: order.deliveryTime,
           completedAt: order.deliveryCompletedAt
@@ -646,7 +646,7 @@ router.post('/complete-delivery/:orderId',
 
         io.to(`order-${order._id}`).emit('order-status-updated', {
           orderId: order._id,
-          orderNumber: order.orderNumber,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
           status: 'delivered',
           message: 'Your order has been delivered! Thank you for ordering from Sewrica Cafe!',
           updatedAt: new Date()

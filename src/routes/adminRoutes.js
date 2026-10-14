@@ -245,7 +245,7 @@ router.post('/orders/:orderId/assign-chef', async (req, res) => {
     if (io) {
       io.to(`chef-${chefId}`).emit('order-assigned', {
         orderId: order._id,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         customerName: order.customerName,
         customerPhone: order.customerPhone,
         totalAmount: order.totalAmount,
@@ -255,7 +255,7 @@ router.post('/orders/:orderId/assign-chef', async (req, res) => {
       
       io.to('staff-admin').emit('order-assigned-chef', {
         orderId: order._id,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         chefName: chef.name
       });
     }
@@ -329,7 +329,7 @@ router.post('/orders/:orderId/assign-delivery', async (req, res) => {
     if (io) {
       io.to(`delivery-${deliveryId}`).emit('order-assigned', {
         orderId: order._id,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         customerName: order.customerName,
         customerPhone: order.customerPhone,
         deliveryAddress: order.deliveryAddress,
@@ -340,7 +340,7 @@ router.post('/orders/:orderId/assign-delivery', async (req, res) => {
       
       io.to('staff-admin').emit('order-assigned-delivery', {
         orderId: order._id,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         deliveryName: delivery.name
       });
     }
@@ -419,7 +419,10 @@ router.get('/recent-orders', async (req, res) => {
       .populate('customer', 'name email')
       .lean();
     
-    res.json(recentOrders);
+    res.json(recentOrders.map((order) => ({
+      ...order,
+      orderNumber: order.dailyOrderNumber || order.orderNumber
+    })));
   } catch (error) {
     console.error('Recent orders error:', error);
     res.status(500).json({ message: 'Server error' });
@@ -444,7 +447,10 @@ router.get('/orders', async (req, res) => {
       .populate('assignedDelivery', 'name email')
       .lean();
     
-    res.json(orders);
+    res.json(orders.map((order) => ({
+      ...order,
+      orderNumber: order.dailyOrderNumber || order.orderNumber
+    })));
   } catch (error) {
     console.error('Orders error:', error);
     res.status(500).json({ message: 'Server error' });
@@ -885,7 +891,7 @@ router.get('/reports/staff/:staffId', async (req, res) => {
             { assignedChef: staffObjId },
             { assignedDelivery: staffObjId }
           ]
-        }).select('orderNumber status paymentStatus totalAmount items createdAt').lean()
+        }).select('orderNumber dailyOrderNumber status paymentStatus totalAmount items createdAt').lean()
       ]);
     } catch (queryError) {
       console.error('Staff detail query error:', queryError);
@@ -930,7 +936,7 @@ router.get('/reports/staff/:staffId', async (req, res) => {
       itemsBreakdown: Object.fromEntries(items.map((row) => [row._id, row.quantity])),
       recentOrders: orders.slice(0, 20).map((order) => ({
         orderId: order._id,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         status: order.status,
         paymentStatus: order.paymentStatus,
         totalAmount: Number(order.totalAmount || 0).toFixed(2),

@@ -44,7 +44,7 @@ router.post('/create-payment-intent', optionalProtect, async (req, res) => {
       },
       metadata: {
         orderId: order._id.toString(),
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         customerEmail: order.customerEmail,
       },
       ...(order.customerEmail && { receipt_email: order.customerEmail }),
@@ -172,7 +172,7 @@ async function handlePaymentSuccess(paymentIntent) {
       order.paidAt = new Date();
       await order.save();
 
-      console.log(`Payment completed for order ${order.orderNumber}`);
+      console.log(`Payment completed for order ${order.dailyOrderNumber || order.orderNumber}`);
     }
   } catch (error) {
     console.error('Handle payment success error:', error);
@@ -190,7 +190,7 @@ async function handlePaymentFailure(paymentIntent) {
       order.stripePaymentIntentId = paymentIntent.id;
       await order.save();
 
-      console.log(`Payment failed for order ${order.orderNumber}`);
+      console.log(`Payment failed for order ${order.dailyOrderNumber || order.orderNumber}`);
     }
   } catch (error) {
     console.error('Handle payment failure error:', error);

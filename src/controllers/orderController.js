@@ -95,11 +95,16 @@ const createOrder = async (req, res) => {
     // Create order with initial status, retrying if the 5-digit number is already taken
     let order;
     let currentOrderNumber;
+    const orderDate = new Date();
+    const { orderDateKey, dailyOrderNumber } = await generateDailyOrderNumber(orderDate);
     for (let attempt = 0; attempt < ORDER_NUMBER_MAX_ATTEMPTS; attempt++) {
       try {
         currentOrderNumber = await generateOrderNumber();
         order = await Order.create({
           orderNumber: currentOrderNumber,
+        dailyOrderNumber,
+        orderDateKey,
+        createdAt: orderDate,
         customer: user?._id || null,
         guestAccessTokenHash: guestAccessToken
           ? hashGuestAccessToken(guestAccessToken)
@@ -157,13 +162,13 @@ const createOrder = async (req, res) => {
       // Notify all admin/staff rooms about new order
       io.to('staff-admin').to('staff-cashier').emit('new-order', {
         orderId: order._id,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         customerName: order.customerName,
         totalAmount: order.totalAmount,
         createdAt: order.createdAt,
         lotteryTicketNumber: order.lotteryTicketNumber // Include lottery ticket
       });
-      console.log(`📢 New order notification sent for order #${order.orderNumber} with lottery ticket ${lotteryTicketNumber}`);
+      console.log(`📢 New order notification sent for order #${order.dailyOrderNumber || order.orderNumber} with lottery ticket ${lotteryTicketNumber}`);
     }
 
     res.status(201).json({
@@ -171,7 +176,7 @@ const createOrder = async (req, res) => {
       message: 'Order created successfully',
       order: {
         _id: order._id,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         items: order.items,
         subtotal: order.subtotal,
         totalAmount: order.totalAmount,
@@ -256,11 +261,15 @@ const createStaffOrder = async (req, res) => {
 
     const now = new Date();
     let order;
+    const { orderDateKey, dailyOrderNumber } = await generateDailyOrderNumber(now);
     for (let attempt = 0; attempt < ORDER_NUMBER_MAX_ATTEMPTS; attempt++) {
       try {
         const orderNumber = await generateOrderNumber();
         order = await Order.create({
           orderNumber,
+          dailyOrderNumber,
+          orderDateKey,
+          createdAt: now,
           customer: null,
           createdBy: req.user._id,
           customerName: customerName || 'Walk-in customer',
@@ -315,7 +324,7 @@ const createStaffOrder = async (req, res) => {
       }
       recipients.emit('new-order', {
         orderId: order._id,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         customerName: order.customerName,
         totalAmount: order.totalAmount,
         createdAt: order.createdAt,
@@ -329,7 +338,7 @@ const createStaffOrder = async (req, res) => {
       message: 'Order placed and marked as paid',
       order: {
         _id: order._id,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         items: order.items,
         subtotal: order.subtotal,
         totalAmount: order.totalAmount,
@@ -495,13 +504,13 @@ const updateOrderStatus = async (req, res) => {
     // Check if order becomes eligible for lottery (when delivered)
     if (status === 'delivered' && oldStatus !== 'delivered') {
       if (order.lotteryEligible && !order.lotteryWon) {
-        console.log(`🎫 Order #${order.orderNumber} is now eligible for lottery! Ticket: ${order.lotteryTicketNumber}`);
+        console.log(`🎫 Order #${order.dailyOrderNumber || order.orderNumber} is now eligible for lottery! Ticket: ${order.lotteryTicketNumber}`);
         
         const io = req.app.get('io');
         if (io) {
           io.to('staff-admin').emit('lottery-eligible', {
             orderId: order._id,
-            orderNumber: order.orderNumber,
+            orderNumber: order.dailyOrderNumber || order.orderNumber,
             lotteryTicketNumber: order.lotteryTicketNumber,
             customerName: order.customerName
           });
@@ -510,7 +519,7 @@ const updateOrderStatus = async (req, res) => {
     }
 
     await order.save();
-    console.log(`✅ Order ${order.orderNumber} status updated: ${oldStatus} -> ${status}`);
+    console.log(`✅ Order ${order.dailyOrderNumber || order.orderNumber} status updated: ${oldStatus} -> ${status}`);
 
     // Populate for response
     await order.populate('customer', 'name email');
@@ -531,7 +540,7 @@ const updateOrderStatus = async (req, res) => {
 
       io.to(`order-${order._id}`).emit('order-status-updated', {
         orderId: order._id,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         status: order.status,
         oldStatus,
         notes: notes || null,
@@ -542,12 +551,12 @@ const updateOrderStatus = async (req, res) => {
 
       io.to('staff-admin').to('staff-cashier').emit('order-updated', {
         orderId: order._id,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         status: order.status,
         updatedAt: new Date()
       });
 
-      console.log(`📢 Status update notification sent for order #${order.orderNumber}: ${oldStatus} -> ${status}`);
+      console.log(`📢 Status update notification sent for order #${order.dailyOrderNumber || order.orderNumber}: ${oldStatus} -> ${status}`);
     }
 
     res.json({
@@ -617,6 +626,7 @@ const getOrder = async (req, res) => {
       success: true,
       data: {
         ...order.toObject(),
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         lotteryTicketNumber: order.lotteryTicketNumber,
         lotteryWon: order.lotteryWon,
         lotteryEligible: order.lotteryEligible && order.status === 'delivered'
@@ -675,7 +685,7 @@ const cancelOrder = async (req, res) => {
     if (io) {
       io.to(`order-${order._id}`).to('staff-admin').to('staff-cashier').emit('order-cancelled', {
         orderId: order._id,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         cancelledBy: 'customer',
         reason: 'Cancelled by customer'
       });
@@ -748,7 +758,7 @@ const confirmPayment = async (req, res) => {
     if (io) {
       io.to(`order-${order._id}`).to('staff-admin').to('staff-cashier').emit('payment-completed', {
         orderId: order._id,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         paymentMethod: order.paymentMethod,
         paidAt: order.paidAt,
         lotteryTicketNumber: order.lotteryTicketNumber
@@ -760,7 +770,7 @@ const confirmPayment = async (req, res) => {
       message: 'Payment confirmed successfully',
       order: {
         _id: order._id,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         paymentStatus: order.paymentStatus,
         paidAt: order.paidAt,
         lotteryTicketNumber: order.lotteryTicketNumber
@@ -825,7 +835,7 @@ const processCashPayment = async (req, res) => {
     if (io) {
       io.to(`order-${order._id}`).to('staff-admin').to('staff-cashier').emit('payment-completed', {
         orderId: order._id,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         paymentMethod: 'cash',
         amountReceived,
         change,
@@ -839,7 +849,7 @@ const processCashPayment = async (req, res) => {
       message: 'Cash payment processed successfully',
       order: {
         _id: order._id,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         totalAmount: order.totalAmount,
         amountReceived,
         change,
@@ -968,7 +978,7 @@ const refundPayment = async (req, res) => {
     if (io) {
       io.to(`order-${order._id}`).to('staff-admin').emit('payment-refunded', {
         orderId: order._id,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         paymentStatus: 'refunded',
         refundedAt: order.refundedAt,
         reason,
@@ -981,7 +991,7 @@ const refundPayment = async (req, res) => {
       message: 'Payment refunded successfully',
       order: {
         _id: order._id,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         paymentStatus: order.paymentStatus,
         refundedAt: order.refundedAt,
         refundReason: reason,
@@ -998,6 +1008,8 @@ const refundPayment = async (req, res) => {
 const ORDER_NUMBER_COUNTER_ID = 'orderNumber';
 const ORDER_NUMBER_LENGTH = 4;
 const ORDER_NUMBER_MAX_ATTEMPTS = 25;
+const DAILY_ORDER_NUMBER_LENGTH = 4;
+const ORDER_TIME_ZONE = 'Africa/Addis_Ababa';
 
 const initializeOrderNumberCounter = async () => {
   const counterExists = await Counter.exists({ _id: ORDER_NUMBER_COUNTER_ID });
@@ -1035,6 +1047,64 @@ const generateOrderNumber = async () => {
   }
 
   return String(counter.sequence).padStart(ORDER_NUMBER_LENGTH, '0');
+};
+
+const getOrderDateKey = (date) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: ORDER_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return `${values.year}${values.month}${values.day}`;
+};
+
+const generateDailyOrderNumber = async (date) => {
+  const orderDateKey = getOrderDateKey(date);
+  const counterId = `dailyOrderNumber:${orderDateKey}`;
+  let counterExists = await Counter.exists({ _id: counterId });
+
+  if (!counterExists) {
+    const localDayStart = new Date(
+      `${orderDateKey.slice(0, 4)}-${orderDateKey.slice(4, 6)}-${orderDateKey.slice(6, 8)}T00:00:00+03:00`
+    );
+    const localDayEnd = new Date(localDayStart.getTime() + 24 * 60 * 60 * 1000);
+    const existingOrders = await Order.find({
+      createdAt: { $gte: localDayStart, $lt: localDayEnd }
+    }).select('orderNumber dailyOrderNumber').lean();
+    const initialSequence = existingOrders.reduce((max, order) => {
+      const value = Number(order.dailyOrderNumber || order.orderNumber);
+      return Number.isInteger(value) && value <= 10 ** DAILY_ORDER_NUMBER_LENGTH - 1
+        ? Math.max(max, value)
+        : max;
+    }, 0);
+
+    try {
+      await Counter.create({ _id: counterId, sequence: initialSequence });
+    } catch (error) {
+      if (error.code !== 11000) {
+        throw error;
+      }
+    }
+  }
+
+  const counter = await Counter.findOneAndUpdate(
+    { _id: counterId },
+    { $inc: { sequence: 1 } },
+    { new: true }
+  );
+  if (!counter) {
+    throw new Error(`Failed to allocate the daily order number for ${orderDateKey}`);
+  }
+  if (counter.sequence > 10 ** DAILY_ORDER_NUMBER_LENGTH - 1) {
+    throw new Error(`Daily order number limit reached for ${orderDateKey}`);
+  }
+
+  return {
+    orderDateKey,
+    dailyOrderNumber: String(counter.sequence).padStart(DAILY_ORDER_NUMBER_LENGTH, '0')
+  };
 };
 
 // Export all functions

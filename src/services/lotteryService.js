@@ -43,7 +43,7 @@ class LotteryService {
   static generateWinnerCertificate(winner) {
     const date = new Date().toLocaleDateString();
     const ticketNumber = winner.lotteryTicketNumber || 'N/A';
-    const orderNumber = winner.orderNumber || 'N/A';
+    const orderNumber = winner.dailyOrderNumber || winner.orderNumber || 'N/A';
     const customerName = winner.customerName || winner.customer?.name || 'Customer';
     const amount = winner.totalAmount || 0;
     

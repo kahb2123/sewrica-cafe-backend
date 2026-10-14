@@ -11,7 +11,7 @@ router.get('/my-tickets', protect, async (req, res) => {
     const orders = await Order.find({
       customer: req.user._id,
       lotteryTicketNumber: { $ne: null }
-    }).select('orderNumber lotteryTicketNumber createdAt totalAmount status paymentStatus lotteryWon lotteryPrizeClaimed')
+    }).select('orderNumber dailyOrderNumber lotteryTicketNumber createdAt totalAmount status paymentStatus lotteryWon lotteryPrizeClaimed')
       .sort({ createdAt: -1 });
 
     const eligibleCount = orders.filter(order => 
@@ -24,7 +24,7 @@ router.get('/my-tickets', protect, async (req, res) => {
     res.json({
       success: true,
       tickets: orders.map(order => ({
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         lotteryTicketNumber: order.lotteryTicketNumber,
         date: order.createdAt,
         amount: order.totalAmount,
@@ -80,7 +80,7 @@ router.get('/admin/tickets', protect, async (req, res) => {
       eligibleTickets: eligibleOrders.length,
       tickets: orders.map(order => ({
         _id: order._id,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         lotteryTicketNumber: order.lotteryTicketNumber,
         customer: order.customer,
         amount: order.totalAmount,
@@ -138,7 +138,7 @@ router.post('/admin/draw', protect, async (req, res) => {
 
     // Prepare winner data
     const winnerData = winners.map(winner => ({
-      orderNumber: winner.orderNumber,
+      orderNumber: winner.dailyOrderNumber || winner.orderNumber,
       lotteryTicketNumber: winner.lotteryTicketNumber,
       customer: winner.customer,
       amount: winner.totalAmount,
@@ -228,7 +228,7 @@ router.post('/admin/claim-prize/:ticketNumber', protect, async (req, res) => {
     if (io) {
       io.to(`order-${order._id}`).emit('prize-claimed', {
         ticketNumber: order.lotteryTicketNumber,
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         claimedAt: order.lotteryPrizeClaimedAt
       });
     }
@@ -237,7 +237,7 @@ router.post('/admin/claim-prize/:ticketNumber', protect, async (req, res) => {
       success: true,
       message: `Prize claimed for ticket ${ticketNumber}`,
       order: {
-        orderNumber: order.orderNumber,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
         ticketNumber: order.lotteryTicketNumber,
         customer: order.customer,
         claimedAt: order.lotteryPrizeClaimedAt
