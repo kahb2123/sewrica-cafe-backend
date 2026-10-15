@@ -32,7 +32,7 @@ const createOrder = async (req, res) => {
       return res.status(400).json({ message: 'Order must contain at least one item' });
     }
 
-    if (!customerInfo || !customerInfo.name || !customerInfo.phone) {
+    if (!customerInfo || !customerInfo.name) {
       return res.status(400).json({ message: 'Customer information is required' });
     }
 
@@ -110,7 +110,7 @@ const createOrder = async (req, res) => {
           ? hashGuestAccessToken(guestAccessToken)
           : undefined,
         customerName: customerInfo.name,
-        customerPhone: customerInfo.phone,
+        customerPhone: customerInfo.phone || '',
         customerEmail: customerInfo.email || user?.email || '',
         items: orderItems,
         subtotal,
