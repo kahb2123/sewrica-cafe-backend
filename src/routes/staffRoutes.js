@@ -2,7 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/authMiddleware');
-const { requirePermission, requirePagePermission } = require('../middleware/roleMiddleware');
+const { requirePermission, requirePagePermission, requireRole } = require('../middleware/roleMiddleware');
 const { PERMISSIONS } = require('../config/roleMap');
 const { updateOrderStatus } = require('../controllers/orderController');
 const Order = require('../models/Order');
@@ -53,6 +53,24 @@ router.get('/:role',
 });
 
 // ========== STAFF ORDER ENDPOINTS ==========
+
+// Get orders entered by the current waiter
+router.get('/orders/waiter',
+  requirePagePermission('staffDashboard', 'read'),
+  requireRole('waiter', 'admin'),
+  async (req, res) => {
+    try {
+      const orders = await Order.find({ createdBy: req.user._id })
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .populate('customer', 'name email phone');
+
+      res.json({ success: true, orders });
+    } catch (error) {
+      console.error('Error fetching waiter orders:', error);
+      res.status(500).json({ message: 'Failed to fetch waiter tasks' });
+    }
+  });
 
 // Get orders assigned to current chef (active cooking orders)
 router.get('/orders/cooking',
