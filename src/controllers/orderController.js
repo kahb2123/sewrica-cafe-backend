@@ -272,7 +272,7 @@ const createStaffOrder = async (req, res) => {
           createdAt: now,
           customer: null,
           createdBy: req.user._id,
-          customerName: customerName || 'Walk-in customer',
+          customerName: customerName || req.user.name || 'Walk-in customer',
           customerPhone,
           customerEmail: '',
           items: orderItems,
