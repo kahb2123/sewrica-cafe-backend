@@ -15,7 +15,12 @@ const ingredientSchema = new mongoose.Schema({
   unitPrice: { type: Number, min: 0, default: 0 },
   reorderLevel: { type: Number, min: 0, default: 0 },
   supplier: { type: String, trim: true, default: '' },
-  purchases: { type: [purchaseSchema], default: [] }
+  purchases: { type: [purchaseSchema], default: [] },
+  isArchived: { type: Boolean, default: false },
+  archivedAt: Date,
+  archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  archivedByName: { type: String, trim: true, default: '' },
+  archiveReason: { type: String, trim: true, default: '' }
 }, { timestamps: true });
 
 ingredientSchema.index({ name: 1 }, { unique: true });

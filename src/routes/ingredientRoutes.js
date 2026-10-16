@@ -13,7 +13,7 @@ const isNonNegativeNumber = (value) => Number.isFinite(Number(value)) && Number(
 
 router.get('/', requirePagePermission('adminIngredients', 'read'), async (req, res) => {
   try {
-    const ingredients = await Ingredient.find().sort({ name: 1 });
+    const ingredients = await Ingredient.find({ isArchived: { $ne: true } }).sort({ name: 1 });
     res.json({ success: true, data: ingredients });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to load ingredients' });
@@ -143,13 +143,13 @@ router.post('/withdrawals', requirePagePermission('adminIngredients', 'write'), 
     }
 
     const ingredient = await Ingredient.findOneAndUpdate(
-      { _id: ingredientId, quantity: { $gte: quantity } },
+      { _id: ingredientId, isArchived: { $ne: true }, quantity: { $gte: quantity } },
       { $inc: { quantity: -quantity } },
       { new: true, runValidators: true }
     );
 
     if (!ingredient) {
-      const current = await Ingredient.findById(ingredientId);
+      const current = await Ingredient.findOne({ _id: ingredientId, isArchived: { $ne: true } });
       if (!current) {
         return res.status(404).json({ success: false, message: 'Ingredient not found' });
       }
@@ -188,8 +188,8 @@ router.post('/:id/purchases', requirePagePermission('adminIngredients', 'write')
       return res.status(400).json({ success: false, message: 'Purchase quantity must be greater than 0 and cost cannot be negative' });
     }
 
-    const ingredient = await Ingredient.findByIdAndUpdate(
-      req.params.id,
+    const ingredient = await Ingredient.findOneAndUpdate(
+      { _id: req.params.id, isArchived: { $ne: true } },
       {
         $inc: { quantity },
         $set: { supplier: String(req.body.supplier || ''), unitPrice: unitCost },
@@ -219,11 +219,43 @@ router.patch('/:id', requirePagePermission('adminIngredients', 'write'), async (
       updates[field] = Number(req.body[field]);
     }
 
-    const ingredient = await Ingredient.findByIdAndUpdate(req.params.id, updates, { new: true, runValidators: true });
+    const ingredient = await Ingredient.findOneAndUpdate(
+      { _id: req.params.id, isArchived: { $ne: true } },
+      updates,
+      { new: true, runValidators: true }
+    );
     if (!ingredient) return res.status(404).json({ success: false, message: 'Ingredient not found' });
     res.json({ success: true, data: ingredient });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to update ingredient' });
+  }
+});
+
+router.delete('/:id', requirePagePermission('adminIngredients', 'write'), async (req, res) => {
+  try {
+    const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
+    if (!reason) {
+      return res.status(400).json({ success: false, message: 'A reason is required to delete an ingredient' });
+    }
+
+    const ingredient = await Ingredient.findOneAndUpdate(
+      { _id: req.params.id, isArchived: { $ne: true } },
+      {
+        $set: {
+          isArchived: true,
+          archivedAt: new Date(),
+          archivedBy: req.user._id,
+          archivedByName: req.user.name || '',
+          archiveReason: reason
+        }
+      },
+      { new: true, runValidators: true }
+    );
+    if (!ingredient) return res.status(404).json({ success: false, message: 'Ingredient not found' });
+
+    res.json({ success: true, message: 'Ingredient deleted and archived for recordkeeping' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to delete ingredient' });
   }
 });
 
