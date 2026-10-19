@@ -134,6 +134,11 @@ const orderSchema = new mongoose.Schema({
     ref: 'User',
     default: null
   },
+  assignedWaiter: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
   
   // Acceptance fields
   chefAccepted: {
@@ -171,7 +176,8 @@ const orderSchema = new mongoose.Schema({
   // Assignment timestamps
   assignedAt: {
     chef: Date,
-    delivery: Date
+    delivery: Date,
+    waiter: Date
   },
   
   // Time tracking
@@ -284,7 +290,7 @@ orderSchema.index({ customer: 1, createdAt: -1 });
 orderSchema.index({ lotteryTicketNumber: 1 });
 orderSchema.index({ createdAt: -1, paymentStatus: 1 });
 orderSchema.index({ processedBy: 1, createdAt: -1 });
-orderSchema.index({ createdBy: 1, waiterCompletedAt: 1, status: 1 });
+orderSchema.index({ assignedWaiter: 1, waiterCompletedAt: 1, status: 1 });
 orderSchema.index({ assignedDelivery: 1, deliveryCompletedAt: 1, status: 1 });
 
 module.exports = mongoose.model('Order', orderSchema);

@@ -57,6 +57,11 @@ const initSocket = (server, allowedOrigins) => {
       socket.join('staff-delivery');
     });
 
+    socket.on('register-waiter', (waiterId) => {
+      socket.join(`waiter-${waiterId}`);
+      socket.join('staff-waiter');
+    });
+
     socket.on('register-admin', (adminId) => socket.join('staff-admin'));
     socket.on('register-cashier', (cashierId) => socket.join('staff-cashier'));
 

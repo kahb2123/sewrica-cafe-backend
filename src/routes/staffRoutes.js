@@ -76,14 +76,16 @@ router.get('/:role',
 
 // ========== STAFF ORDER ENDPOINTS ==========
 
-// Get orders entered by the current waiter
+// Get orders assigned to the current waiter by an administrator
 router.get('/orders/waiter',
   requirePagePermission('staffDashboard', 'read'),
   requireRole('waiter', 'admin'),
   async (req, res) => {
     try {
-      const orders = await Order.find({ createdBy: req.user._id })
+      const query = req.user.role === 'admin' ? {} : { assignedWaiter: req.user._id };
+      const orders = await Order.find(query)
         .sort({ createdAt: -1 })
+        .populate('assignedWaiter', 'name')
         .populate('customer', 'name email phone');
 
       res.json({ success: true, orders });
@@ -127,7 +129,7 @@ router.get('/orders/daily-summary',
       }
       const startOfDay = new Date(utcCalendarDate.getTime() - 3 * 60 * 60 * 1000);
       const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
-      const roleField = req.user.role === 'waiter' ? 'createdBy' : 'assignedDelivery';
+      const roleField = req.user.role === 'waiter' ? 'assignedWaiter' : 'assignedDelivery';
       const completionField = req.user.role === 'waiter' ? 'waiterCompletedAt' : 'deliveryCompletedAt';
       const [summary] = await Order.aggregate([
         {
@@ -166,7 +168,7 @@ router.post('/orders/:orderId/waiter-complete',
   requireRole('waiter'),
   async (req, res) => {
     try {
-      const order = await Order.findOne({ _id: req.params.orderId, createdBy: req.user._id });
+      const order = await Order.findOne({ _id: req.params.orderId, assignedWaiter: req.user._id });
       if (!order) {
         return res.status(404).json({ success: false, message: 'Order task not found' });
       }
@@ -206,7 +208,7 @@ router.post('/orders/waiter-complete-batch',
         return res.status(400).json({ success: false, message: 'Order list contains invalid or duplicate IDs' });
       }
 
-      const orders = await Order.find({ _id: { $in: ids }, createdBy: req.user._id });
+      const orders = await Order.find({ _id: { $in: ids }, assignedWaiter: req.user._id });
       if (orders.length !== ids.length) {
         return res.status(404).json({ success: false, message: 'One or more order tasks were not found' });
       }
@@ -221,7 +223,7 @@ router.post('/orders/waiter-complete-batch',
       const result = await Order.updateMany(
         {
           _id: { $in: ids },
-          createdBy: req.user._id,
+          assignedWaiter: req.user._id,
           waiterCompletedAt: null,
           status: { $ne: 'cancelled' }
         },
@@ -1038,6 +1040,7 @@ router.get('/orders/kitchen',
         .sort({ createdAt: 1 })
         .populate('assignedChef', 'name')
         .populate('assignedDelivery', 'name')
+        .populate('assignedWaiter', 'name')
         .populate('items.menuItem');
 
       res.json(orders || []);
