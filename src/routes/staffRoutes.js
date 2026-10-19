@@ -4,9 +4,31 @@ const router = express.Router();
 const { protect } = require('../middleware/authMiddleware');
 const { requirePermission, requirePagePermission, requireRole } = require('../middleware/roleMiddleware');
 const { PERMISSIONS } = require('../config/roleMap');
+const mongoose = require('mongoose');
 const { updateOrderStatus } = require('../controllers/orderController');
 const Order = require('../models/Order');
 const User = require('../models/User');
+
+const normalizeLocation = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+const getOrderLocationKey = (order) => {
+  if (order.tableNumber) return `table:${normalizeLocation(order.tableNumber)}`;
+  if (order.deliveryMethod === 'delivery' && order.deliveryAddress) {
+    const address = typeof order.deliveryAddress === 'string'
+      ? order.deliveryAddress
+      : [
+          order.deliveryAddress.street,
+          order.deliveryAddress.area,
+          order.deliveryAddress.building,
+          order.deliveryAddress.floor,
+          order.deliveryAddress.city,
+          order.deliveryAddress.additionalInfo
+        ].filter(Boolean).join(', ');
+    const normalizedAddress = normalizeLocation(address);
+    if (normalizedAddress) return `address:${normalizedAddress}`;
+  }
+  if (order.deliveryMethod === 'pickup') return 'pickup';
+  return `order:${order._id}`;
+};
 
 // Apply protect middleware to ALL staff routes
 router.use(protect);
@@ -62,7 +84,6 @@ router.get('/orders/waiter',
     try {
       const orders = await Order.find({ createdBy: req.user._id })
         .sort({ createdAt: -1 })
-        .limit(100)
         .populate('customer', 'name email phone');
 
       res.json({ success: true, orders });
@@ -170,6 +191,144 @@ router.post('/orders/:orderId/waiter-complete',
     }
   });
 
+router.post('/orders/waiter-complete-batch',
+  requirePagePermission('staffDashboard', 'write'),
+  requirePermission(PERMISSIONS.STAFF_TASK_COMPLETE),
+  requireRole('waiter'),
+  async (req, res) => {
+    try {
+      const { orderIds } = req.body;
+      if (!Array.isArray(orderIds) || orderIds.length === 0 || orderIds.length > 100) {
+        return res.status(400).json({ success: false, message: 'Provide between 1 and 100 orders to complete' });
+      }
+      const ids = [...new Set(orderIds.map(String))];
+      if (ids.length !== orderIds.length || ids.some((id) => !mongoose.Types.ObjectId.isValid(id))) {
+        return res.status(400).json({ success: false, message: 'Order list contains invalid or duplicate IDs' });
+      }
+
+      const orders = await Order.find({ _id: { $in: ids }, createdBy: req.user._id });
+      if (orders.length !== ids.length) {
+        return res.status(404).json({ success: false, message: 'One or more order tasks were not found' });
+      }
+      if (new Set(orders.map(getOrderLocationKey)).size !== 1) {
+        return res.status(400).json({ success: false, message: 'Only orders from the same table or place can be completed together' });
+      }
+      if (orders.some((order) => order.status === 'cancelled' || order.waiterCompletedAt)) {
+        return res.status(409).json({ success: false, message: 'One or more order tasks are already completed or cancelled' });
+      }
+
+      const completedAt = new Date();
+      const result = await Order.updateMany(
+        {
+          _id: { $in: ids },
+          createdBy: req.user._id,
+          waiterCompletedAt: null,
+          status: { $ne: 'cancelled' }
+        },
+        { $set: { waiterCompletedAt: completedAt } }
+      );
+      if (result.modifiedCount !== ids.length) {
+        return res.status(409).json({ success: false, message: 'Some orders changed while completing this table group. Refresh and try again.' });
+      }
+
+      res.json({ success: true, completedCount: result.modifiedCount, completedAt });
+    } catch (error) {
+      console.error('Error completing waiter order group:', error);
+      res.status(500).json({ success: false, message: 'Failed to complete waiter order group' });
+    }
+  });
+
+router.post('/orders/delivery-complete-batch',
+  requirePagePermission('staffDashboard', 'write'),
+  requirePagePermission('staffOrdersDelivery', 'write'),
+  requirePermission(PERMISSIONS.ORDERS_COMPLETE_DELIVERY),
+  requireRole('delivery'),
+  async (req, res) => {
+    try {
+      const { orderIds } = req.body;
+      if (!Array.isArray(orderIds) || orderIds.length === 0 || orderIds.length > 100) {
+        return res.status(400).json({ success: false, message: 'Provide between 1 and 100 orders to complete' });
+      }
+      const ids = [...new Set(orderIds.map(String))];
+      if (ids.length !== orderIds.length || ids.some((id) => !mongoose.Types.ObjectId.isValid(id))) {
+        return res.status(400).json({ success: false, message: 'Order list contains invalid or duplicate IDs' });
+      }
+
+      const orders = await Order.find({ _id: { $in: ids }, assignedDelivery: req.user._id });
+      if (orders.length !== ids.length) {
+        return res.status(404).json({ success: false, message: 'One or more deliveries were not found' });
+      }
+      if (new Set(orders.map(getOrderLocationKey)).size !== 1) {
+        return res.status(400).json({ success: false, message: 'Only deliveries to the same place can be completed together' });
+      }
+      if (orders.some((order) => order.status !== 'out-for-delivery')) {
+        return res.status(409).json({ success: false, message: 'Every order in this delivery group must be out for delivery' });
+      }
+
+      const completedAt = new Date();
+      const operations = orders.map((order) => {
+        const deliveryMinutes = order.deliveryStartedAt
+          ? Math.round((completedAt - order.deliveryStartedAt) / 60000)
+          : null;
+        return {
+          updateOne: {
+            filter: {
+              _id: order._id,
+              assignedDelivery: req.user._id,
+              status: 'out-for-delivery'
+            },
+            update: {
+              $set: {
+                status: 'delivered',
+                deliveryCompletedAt: completedAt,
+                ...(deliveryMinutes !== null && { deliveryTime: deliveryMinutes })
+              },
+              $push: {
+                statusHistory: {
+                  status: 'delivered',
+                  changedBy: req.user._id,
+                  changedAt: completedAt,
+                  notes: `Delivery completed in ${deliveryMinutes ?? '?'} minutes`
+                }
+              }
+            }
+          }
+        };
+      });
+      const result = await Order.bulkWrite(operations);
+      if (result.modifiedCount !== ids.length) {
+        return res.status(409).json({ success: false, message: 'Some deliveries changed while completing this group. Refresh and try again.' });
+      }
+
+      const io = req.app.get('io');
+      if (io) {
+        orders.forEach((order) => {
+          io.to('staff-admin').emit('order-delivered', {
+            orderId: order._id,
+            orderNumber: order.dailyOrderNumber || order.orderNumber,
+            deliveryName: req.user.name,
+            deliveryTime: order.deliveryStartedAt
+              ? Math.round((completedAt - order.deliveryStartedAt) / 60000)
+              : order.deliveryTime,
+            completedAt
+          });
+          io.to(`order-${order._id}`).emit('order-status-updated', {
+            orderId: order._id,
+            orderNumber: order.dailyOrderNumber || order.orderNumber,
+            status: 'delivered',
+            message: 'Your order has been delivered! Thank you for ordering from Sewrica Cafe!',
+            updatedAt: completedAt
+          });
+        });
+      }
+
+      res.json({ success: true, completedCount: result.modifiedCount, completedAt });
+    } catch (error) {
+      console.error('Error completing delivery group:', error);
+      res.status(500).json({ success: false, message: 'Failed to complete delivery group' });
+    }
+  });
+
 // Get orders assigned to current chef (active cooking orders)
 router.get('/orders/cooking',
   requirePagePermission('staffDashboard', 'read'),
@@ -257,7 +416,6 @@ router.get('/orders/delivery/completed',
         status: 'delivered'
       })
         .sort({ deliveryCompletedAt: -1 })
-        .limit(100)
         .populate('customer', 'name email phone');
 
       res.json({

@@ -109,6 +109,12 @@ const routePermissions = {
   '/api/staff/orders/:orderId/waiter-complete': {
     POST: [PERMISSIONS.STAFF_TASK_COMPLETE],
   },
+  '/api/staff/orders/waiter-complete-batch': {
+    POST: [PERMISSIONS.STAFF_TASK_COMPLETE],
+  },
+  '/api/staff/orders/delivery-complete-batch': {
+    POST: [PERMISSIONS.ORDERS_COMPLETE_DELIVERY],
+  },
   '/api/staff/orders/cooking/completed': {
     GET: [PERMISSIONS.ORDERS_VIEW],
   },
