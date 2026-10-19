@@ -56,6 +56,7 @@ const orderSchema = new mongoose.Schema({
   customerName: String,
   customerPhone: String,
   customerEmail: String,
+  tableNumber: String,
   items: [orderItemSchema],
   subtotal: {
     type: Number,
@@ -97,7 +98,7 @@ const orderSchema = new mongoose.Schema({
   processedAt: Date,
   deliveryMethod: {
     type: String,
-    enum: ['delivery', 'pickup'],
+    enum: ['delivery', 'pickup', 'dine-in'],
     required: true
   },
   
@@ -182,6 +183,7 @@ const orderSchema = new mongoose.Schema({
   },
   deliveryStartedAt: Date,
   deliveryCompletedAt: Date,
+  waiterCompletedAt: Date,
   
   deliveryTime: {
     type: String,
@@ -282,5 +284,7 @@ orderSchema.index({ customer: 1, createdAt: -1 });
 orderSchema.index({ lotteryTicketNumber: 1 });
 orderSchema.index({ createdAt: -1, paymentStatus: 1 });
 orderSchema.index({ processedBy: 1, createdAt: -1 });
+orderSchema.index({ createdBy: 1, waiterCompletedAt: 1, status: 1 });
+orderSchema.index({ assignedDelivery: 1, deliveryCompletedAt: 1, status: 1 });
 
 module.exports = mongoose.model('Order', orderSchema);

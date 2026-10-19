@@ -72,6 +72,104 @@ router.get('/orders/waiter',
     }
   });
 
+router.get('/orders/daily-summary',
+  requirePagePermission('staffDashboard', 'read'),
+  requirePermission(PERMISSIONS.STAFF_TASKS_VIEW),
+  requireRole('waiter', 'delivery'),
+  async (req, res) => {
+    try {
+      const dateValue = req.query.date;
+      const todayParts = new Intl.DateTimeFormat('en', {
+            timeZone: 'Africa/Addis_Ababa',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+          }).formatToParts(new Date()).reduce((parts, part) => {
+            if (part.type !== 'literal') parts[part.type] = part.value;
+            return parts;
+          }, {});
+      const today = `${todayParts.year}-${todayParts.month}-${todayParts.day}`;
+      const date = typeof dateValue === 'string' && dateValue ? dateValue : today;
+      const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+      if (!match) {
+        return res.status(400).json({ message: 'Date must be in YYYY-MM-DD format' });
+      }
+
+      const [, year, month, day] = match;
+      const utcCalendarDate = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+      if (
+        utcCalendarDate.getUTCFullYear() !== Number(year) ||
+        utcCalendarDate.getUTCMonth() !== Number(month) - 1 ||
+        utcCalendarDate.getUTCDate() !== Number(day)
+      ) {
+        return res.status(400).json({ message: 'Date is invalid' });
+      }
+      const startOfDay = new Date(utcCalendarDate.getTime() - 3 * 60 * 60 * 1000);
+      const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
+      const roleField = req.user.role === 'waiter' ? 'createdBy' : 'assignedDelivery';
+      const completionField = req.user.role === 'waiter' ? 'waiterCompletedAt' : 'deliveryCompletedAt';
+      const [summary] = await Order.aggregate([
+        {
+          $match: {
+            [roleField]: req.user._id,
+            [completionField]: { $gte: startOfDay, $lt: endOfDay },
+            status: { $ne: 'cancelled' }
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            completedOrders: { $sum: 1 },
+            totalRevenue: { $sum: '$totalAmount' }
+          }
+        }
+      ]);
+
+      res.json({
+        success: true,
+        summary: {
+          date,
+          completedOrders: summary?.completedOrders || 0,
+          totalRevenue: summary?.totalRevenue || 0
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching daily staff summary:', error);
+      res.status(500).json({ message: 'Failed to fetch daily task summary' });
+    }
+  });
+
+router.post('/orders/:orderId/waiter-complete',
+  requirePagePermission('staffDashboard', 'write'),
+  requirePermission(PERMISSIONS.STAFF_TASK_COMPLETE),
+  requireRole('waiter'),
+  async (req, res) => {
+    try {
+      const order = await Order.findOne({ _id: req.params.orderId, createdBy: req.user._id });
+      if (!order) {
+        return res.status(404).json({ success: false, message: 'Order task not found' });
+      }
+      if (order.status === 'cancelled') {
+        return res.status(400).json({ success: false, message: 'Cancelled orders cannot be completed as waiter tasks' });
+      }
+      if (order.waiterCompletedAt) {
+        return res.status(400).json({ success: false, message: 'Waiter task is already completed' });
+      }
+
+      order.waiterCompletedAt = new Date();
+      await order.save();
+
+      res.json({
+        success: true,
+        message: 'Waiter task completed',
+        order
+      });
+    } catch (error) {
+      console.error('Error completing waiter task:', error);
+      res.status(500).json({ success: false, message: 'Failed to complete waiter task' });
+    }
+  });
+
 // Get orders assigned to current chef (active cooking orders)
 router.get('/orders/cooking',
   requirePagePermission('staffDashboard', 'read'),
@@ -151,15 +249,15 @@ router.get('/orders/cooking/completed',
 router.get('/orders/delivery/completed',
   requirePagePermission('staffDashboard', 'read'),
   requirePagePermission('staffOrdersDelivery', 'read'),
-  requirePermission(PERMISSIONS.ORDERS_VIEW),
+  requirePermission(PERMISSIONS.STAFF_TASKS_VIEW),
   async (req, res) => {
     try {
       const orders = await Order.find({
         assignedDelivery: req.user._id,
         status: 'delivered'
       })
-        .sort({ createdAt: -1 })
-        .limit(20)
+        .sort({ deliveryCompletedAt: -1 })
+        .limit(100)
         .populate('customer', 'name email phone');
 
       res.json({

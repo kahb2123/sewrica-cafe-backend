@@ -32,12 +32,21 @@ const createOrder = async (req, res) => {
       return res.status(400).json({ message: 'Order must contain at least one item' });
     }
 
-    if (!customerInfo || !customerInfo.name) {
+    if (!customerInfo || (!customerInfo.name && deliveryMethod !== 'dine-in')) {
       return res.status(400).json({ message: 'Customer information is required' });
     }
 
     if (!paymentMethod || !deliveryMethod) {
       return res.status(400).json({ message: 'Payment method and delivery method are required' });
+    }
+    if (!['delivery', 'pickup', 'dine-in'].includes(deliveryMethod)) {
+      return res.status(400).json({ message: 'Select a valid order type' });
+    }
+    const tableNumber = typeof customerInfo.tableNumber === 'string'
+      ? customerInfo.tableNumber.trim()
+      : '';
+    if (deliveryMethod === 'dine-in' && !tableNumber) {
+      return res.status(400).json({ message: 'Table number is required for dine-in orders' });
     }
 
     // A signed-in customer is attached by optionalProtect; guest checkout is also allowed.
@@ -109,9 +118,10 @@ const createOrder = async (req, res) => {
         guestAccessTokenHash: guestAccessToken
           ? hashGuestAccessToken(guestAccessToken)
           : undefined,
-        customerName: customerInfo.name,
+        customerName: customerInfo.name || user?.name || 'Dine-in customer',
         customerPhone: customerInfo.phone || '',
         customerEmail: customerInfo.email || user?.email || '',
+        tableNumber: deliveryMethod === 'dine-in' ? tableNumber : '',
         items: orderItems,
         subtotal,
         totalAmount,
@@ -197,12 +207,14 @@ const createOrder = async (req, res) => {
 
 const createStaffOrder = async (req, res) => {
   try {
-    const { items, paymentMethod, deliveryMethod, customerInfo = {}, deliveryAddress = {} } = req.body;
+    const { items, paymentMethod, deliveryMethod, customerInfo = {}, deliveryAddress = {}, tableNumber: submittedTableNumber } = req.body;
     const validPaymentMethods = ['cash', 'card', 'tele_birr', 'bank'];
     const customerDetails = customerInfo && typeof customerInfo === 'object' ? customerInfo : {};
     const addressDetails = deliveryAddress && typeof deliveryAddress === 'object' ? deliveryAddress : {};
     const customerName = typeof customerDetails.name === 'string' ? customerDetails.name.trim() : '';
     const customerPhone = typeof customerDetails.phone === 'string' ? customerDetails.phone.trim() : '';
+    const tableNumberValue = submittedTableNumber ?? customerDetails.tableNumber;
+    const tableNumber = typeof tableNumberValue === 'string' ? tableNumberValue.trim() : '';
     const street = typeof addressDetails.street === 'string' ? addressDetails.street.trim() : '';
     const area = typeof addressDetails.area === 'string' ? addressDetails.area.trim() : '';
     const city = typeof addressDetails.city === 'string' ? addressDetails.city.trim() : '';
@@ -213,8 +225,11 @@ const createStaffOrder = async (req, res) => {
     if (!validPaymentMethods.includes(paymentMethod)) {
       return res.status(400).json({ message: 'Select a valid payment method' });
     }
-    if (!['delivery', 'pickup'].includes(deliveryMethod)) {
+    if (!['delivery', 'pickup', 'dine-in'].includes(deliveryMethod)) {
       return res.status(400).json({ message: 'Select a valid order type' });
+    }
+    if (deliveryMethod === 'dine-in' && !tableNumber) {
+      return res.status(400).json({ message: 'Table number is required for dine-in orders' });
     }
     if (deliveryMethod === 'delivery' && (!customerName || !customerPhone || !street)) {
       return res.status(400).json({ message: 'Customer name, phone, and delivery address are required for delivery orders' });
@@ -272,9 +287,10 @@ const createStaffOrder = async (req, res) => {
           createdAt: now,
           customer: null,
           createdBy: req.user._id,
-          customerName: customerName || req.user.name || 'Walk-in customer',
+          customerName: customerName || req.user.name || (deliveryMethod === 'dine-in' ? 'Dine-in customer' : 'Walk-in customer'),
           customerPhone,
           customerEmail: '',
+          tableNumber: deliveryMethod === 'dine-in' ? tableNumber : '',
           items: orderItems,
           subtotal,
           totalAmount: subtotal,

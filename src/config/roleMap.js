@@ -23,6 +23,8 @@ const PERMISSIONS = {
   ORDERS_START_DELIVERY: 'orders:start_delivery',
   ORDERS_COMPLETE_DELIVERY: 'orders:complete_delivery',
   ORDERS_VIEW_ASSIGNED: 'orders:view_assigned',
+  STAFF_TASK_COMPLETE: 'staff:task_complete',
+  STAFF_TASKS_VIEW: 'staff:tasks_view',
 
   STAFF_VIEW: 'staff:view',
   STAFF_CREATE: 'staff:create',
@@ -58,6 +60,8 @@ const rolePermissions = {
 
   waiter: [
     PERMISSIONS.ORDERS_CREATE,
+    PERMISSIONS.STAFF_TASK_COMPLETE,
+    PERMISSIONS.STAFF_TASKS_VIEW,
   ],
 
   delivery: [
@@ -67,6 +71,7 @@ const rolePermissions = {
     PERMISSIONS.ORDERS_REJECT,
     PERMISSIONS.ORDERS_START_DELIVERY,
     PERMISSIONS.ORDERS_COMPLETE_DELIVERY,
+    PERMISSIONS.STAFF_TASKS_VIEW,
   ],
 
   cook: [
@@ -98,11 +103,17 @@ const routePermissions = {
   '/api/staff/orders/delivery': {
     GET: [PERMISSIONS.ORDERS_VIEW_ASSIGNED, PERMISSIONS.ORDERS_ACCEPT],
   },
+  '/api/staff/orders/daily-summary': {
+    GET: [PERMISSIONS.STAFF_TASKS_VIEW],
+  },
+  '/api/staff/orders/:orderId/waiter-complete': {
+    POST: [PERMISSIONS.STAFF_TASK_COMPLETE],
+  },
   '/api/staff/orders/cooking/completed': {
     GET: [PERMISSIONS.ORDERS_VIEW],
   },
   '/api/staff/orders/delivery/completed': {
-    GET: [PERMISSIONS.ORDERS_VIEW],
+    GET: [PERMISSIONS.STAFF_TASKS_VIEW],
   },
   '/api/staff/orders/:orderId/chef-accept': {
     POST: [PERMISSIONS.ORDERS_ACCEPT],
