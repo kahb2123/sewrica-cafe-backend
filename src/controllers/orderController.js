@@ -231,8 +231,8 @@ const createStaffOrder = async (req, res) => {
     if (deliveryMethod === 'dine-in' && !tableNumber) {
       return res.status(400).json({ message: 'Table number is required for dine-in orders' });
     }
-    if (deliveryMethod === 'delivery' && (!customerName || !customerPhone || !street)) {
-      return res.status(400).json({ message: 'Customer name, phone, and delivery address are required for delivery orders' });
+    if (deliveryMethod === 'delivery' && !street) {
+      return res.status(400).json({ message: 'Delivery address is required for delivery orders' });
     }
 
     const requestedQuantities = new Map();
@@ -287,7 +287,7 @@ const createStaffOrder = async (req, res) => {
           createdAt: now,
           customer: null,
           createdBy: req.user._id,
-          customerName: customerName || req.user.name || (deliveryMethod === 'dine-in' ? 'Dine-in customer' : 'Walk-in customer'),
+          customerName: customerName || (deliveryMethod === 'dine-in' ? 'Dine-in customer' : 'Guest'),
           customerPhone,
           customerEmail: '',
           tableNumber: deliveryMethod === 'dine-in' ? tableNumber : '',
@@ -308,12 +308,7 @@ const createStaffOrder = async (req, res) => {
           lotteryTicketNumber: `staff-${crypto.randomUUID()}`,
           amountReceived: paymentMethod === 'cash' ? subtotal : undefined,
           change: paymentMethod === 'cash' ? 0 : undefined,
-          assignedDelivery: deliveryMethod === 'delivery' && req.user.role === 'delivery'
-            ? req.user._id
-            : null,
-          assignedAt: deliveryMethod === 'delivery' && req.user.role === 'delivery'
-            ? { delivery: now }
-            : undefined,
+          assignedDelivery: null,
           lotteryEligible: false,
           statusHistory: [{
             status: 'pending',
@@ -334,11 +329,7 @@ const createStaffOrder = async (req, res) => {
 
     const io = req.app.get('io');
     if (io) {
-      let recipients = io.to('staff-admin').to('staff-cashier').to('staff-cook');
-      if (order.assignedDelivery) {
-        recipients = recipients.to(`delivery-${order.assignedDelivery}`);
-      }
-      recipients.emit('new-order', {
+      io.to('staff-admin').to('staff-cashier').to('staff-cook').emit('new-order', {
         orderId: order._id,
         orderNumber: order.dailyOrderNumber || order.orderNumber,
         customerName: order.customerName,

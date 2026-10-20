@@ -263,8 +263,8 @@ router.post('/orders/delivery-complete-batch',
       if (new Set(orders.map(getOrderLocationKey)).size !== 1) {
         return res.status(400).json({ success: false, message: 'Only deliveries to the same place can be completed together' });
       }
-      if (orders.some((order) => order.status !== 'out-for-delivery')) {
-        return res.status(409).json({ success: false, message: 'Every order in this delivery group must be out for delivery' });
+      if (orders.some((order) => !['ready', 'out-for-delivery'].includes(order.status))) {
+        return res.status(409).json({ success: false, message: 'Every order in this delivery group must be ready for delivery' });
       }
 
       const completedAt = new Date();
@@ -277,7 +277,7 @@ router.post('/orders/delivery-complete-batch',
             filter: {
               _id: order._id,
               assignedDelivery: req.user._id,
-              status: 'out-for-delivery'
+              status: { $in: ['ready', 'out-for-delivery'] }
             },
             update: {
               $set: {
@@ -290,7 +290,9 @@ router.post('/orders/delivery-complete-batch',
                   status: 'delivered',
                   changedBy: req.user._id,
                   changedAt: completedAt,
-                  notes: `Delivery completed in ${deliveryMinutes ?? '?'} minutes`
+                  notes: deliveryMinutes === null
+                    ? 'Delivery completed'
+                    : `Delivery completed in ${deliveryMinutes} minutes`
                 }
               }
             }
@@ -311,7 +313,7 @@ router.post('/orders/delivery-complete-batch',
             deliveryName: req.user.name,
             deliveryTime: order.deliveryStartedAt
               ? Math.round((completedAt - order.deliveryStartedAt) / 60000)
-              : order.deliveryTime,
+              : undefined,
             completedAt
           });
           io.to(`order-${order._id}`).emit('order-status-updated', {
@@ -361,12 +363,11 @@ router.get('/orders/delivery',
   requirePagePermission('staffDashboard', 'read'),
   requirePagePermission('staffOrdersDelivery', 'read'),
   requirePermission(PERMISSIONS.ORDERS_VIEW_ASSIGNED),
-  requirePermission(PERMISSIONS.ORDERS_ACCEPT),
   async (req, res) => {
     try {
       const orders = await Order.find({
         assignedDelivery: req.user._id,
-        status: { $in: ['ready', 'out-for-delivery'] }
+        status: { $in: ['pending', 'confirmed', 'preparing', 'cooking', 'ready', 'out-for-delivery'] }
       })
         .sort({ createdAt: -1 })
         .populate('customer', 'name email phone address');
@@ -893,8 +894,8 @@ router.post('/complete-delivery/:orderId',
         return res.status(403).json({ success: false, message: 'This order is not assigned to you' });
       }
 
-      if (order.status !== 'out-for-delivery') {
-        return res.status(400).json({ success: false, message: 'Order must be out for delivery to complete' });
+      if (!['ready', 'out-for-delivery'].includes(order.status)) {
+        return res.status(400).json({ success: false, message: 'Order must be ready for delivery to complete' });
       }
 
       order.deliveryCompletedAt = new Date();
@@ -905,7 +906,10 @@ router.post('/complete-delivery/:orderId',
       order.status = 'delivered';
 
       if (order.addStatusHistory) {
-        order.addStatusHistory('delivered', req.user._id, `Delivery completed in ${order.deliveryTime} minutes`);
+        const notes = order.deliveryStartedAt
+          ? `Delivery completed in ${order.deliveryTime} minutes`
+          : 'Delivery completed';
+        order.addStatusHistory('delivered', req.user._id, notes);
       }
 
       await order.save();
@@ -916,7 +920,7 @@ router.post('/complete-delivery/:orderId',
           orderId: order._id,
           orderNumber: order.dailyOrderNumber || order.orderNumber,
           deliveryName: req.user.name,
-          deliveryTime: order.deliveryTime,
+          deliveryTime: order.deliveryStartedAt ? order.deliveryTime : undefined,
           completedAt: order.deliveryCompletedAt
         });
 
@@ -1098,6 +1102,7 @@ router.post('/orders/:orderId/assign-chef',
 router.post('/orders/:orderId/assign-delivery',
   requireDashboardPage('write'),
   requirePagePermission('staffOrdersCooking', 'write'),
+  requireRole('admin'),
   async (req, res) => {
     try {
       const { orderId } = req.params;
@@ -1121,6 +1126,21 @@ router.post('/orders/:orderId/assign-delivery',
 
       const io = req.app.get('io');
       if (io) {
+        io.to(`delivery-${deliveryId}`).emit('order-assigned', {
+          orderId: order._id,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
+          customerName: order.customerName,
+          customerPhone: order.customerPhone,
+          deliveryAddress: order.deliveryAddress,
+          totalAmount: order.totalAmount,
+          items: order.items.map((item) => ({ name: item.name, quantity: item.quantity })),
+          assignedAt: order.assignedAt.delivery
+        });
+        io.to('staff-admin').emit('order-assigned-delivery', {
+          orderId: order._id,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
+          deliveryName: delivery.name
+        });
         io.to(`order-${order._id}`).emit('order-updated', { orderId: order._id, assignedDelivery: deliveryId });
       }
 
