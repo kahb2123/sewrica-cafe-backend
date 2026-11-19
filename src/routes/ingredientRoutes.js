@@ -87,7 +87,8 @@ router.get('/report', requirePagePermission('adminIngredients', 'read'), async (
 
 router.post('/', requirePagePermission('adminIngredients', 'write'), async (req, res) => {
   try {
-    const { name, unit, quantity = 0, unitPrice = 0, reorderLevel = 0, supplier = '' } = req.body;
+    const { name, unit, quantity = 0, unitPrice = 0, reorderLevel = 0 } = req.body;
+    const supplier = req.user.name || '';
     if (!name || !unit || !isNonNegativeNumber(quantity) || !isNonNegativeNumber(unitPrice) || !isNonNegativeNumber(reorderLevel)) {
       return res.status(400).json({ success: false, message: 'Name, unit, and valid stock and price values are required' });
     }
@@ -144,7 +145,10 @@ router.post('/withdrawals', requirePagePermission('adminIngredients', 'write'), 
 
     const ingredient = await Ingredient.findOneAndUpdate(
       { _id: ingredientId, isArchived: { $ne: true }, quantity: { $gte: quantity } },
-      { $inc: { quantity: -quantity } },
+      {
+        $inc: { quantity: -quantity },
+        $set: { supplier: req.user.name || '' }
+      },
       { new: true, runValidators: true }
     );
 
@@ -180,6 +184,134 @@ router.post('/withdrawals', requirePagePermission('adminIngredients', 'write'), 
   }
 });
 
+router.patch('/withdrawals/:id', requirePagePermission('adminIngredients', 'write'), async (req, res) => {
+  const quantity = Number(req.body.quantity);
+  const reason = req.body.reason;
+  const note = typeof req.body.note === 'string' ? req.body.note.trim() : '';
+
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    return res.status(400).json({ success: false, message: 'Amount must be greater than 0' });
+  }
+  if (!IngredientWithdrawal.WITHDRAWAL_REASONS.includes(reason)) {
+    return res.status(400).json({ success: false, message: 'Select a valid withdrawal reason' });
+  }
+
+  const session = await Ingredient.startSession();
+  try {
+    let updatedWithdrawal;
+    let updatedIngredient;
+    await session.withTransaction(async () => {
+      const withdrawal = await IngredientWithdrawal.findById(req.params.id).session(session);
+      if (!withdrawal) {
+        const error = new Error('Withdrawal not found');
+        error.statusCode = 404;
+        throw error;
+      }
+
+      const ingredient = await Ingredient.findById(withdrawal.ingredient).session(session);
+      if (!ingredient || ingredient.isArchived) {
+        const error = new Error('Ingredient not found');
+        error.statusCode = 404;
+        throw error;
+      }
+
+      const difference = quantity - withdrawal.quantity;
+      if (difference > ingredient.quantity) {
+        const error = new Error(`Only ${ingredient.quantity} ${ingredient.unit} is available`);
+        error.statusCode = 400;
+        throw error;
+      }
+
+      ingredient.quantity -= difference;
+      withdrawal.quantity = quantity;
+      withdrawal.reason = reason;
+      withdrawal.note = note;
+      withdrawal.totalValue = quantity * (Number(withdrawal.unitPrice) || 0);
+      withdrawal.remainingAfter = ingredient.quantity;
+
+      await ingredient.save({ session });
+      updatedWithdrawal = await withdrawal.save({ session });
+      if (difference !== 0) {
+        await IngredientWithdrawal.updateMany(
+          { ingredient: ingredient._id, createdAt: { $gt: withdrawal.createdAt } },
+          { $inc: { remainingAfter: -difference } },
+          { session }
+        );
+      }
+      updatedIngredient = ingredient;
+    });
+
+    res.json({ success: true, data: updatedWithdrawal, ingredient: updatedIngredient });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to update withdrawal'
+    });
+  } finally {
+    await session.endSession();
+  }
+});
+
+router.patch('/:id/purchases/:purchaseId', requirePagePermission('adminIngredients', 'write'), async (req, res) => {
+  const quantity = Number(req.body.quantity);
+  const unitCost = Number(req.body.unitCost);
+
+  if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitCost) || unitCost < 0) {
+    return res.status(400).json({ success: false, message: 'Quantity must be greater than 0 and unit cost cannot be negative' });
+  }
+
+  const session = await Ingredient.startSession();
+  try {
+    let updatedIngredient;
+    await session.withTransaction(async () => {
+      const ingredient = await Ingredient.findOne({
+        _id: req.params.id,
+        isArchived: { $ne: true }
+      }).session(session);
+      if (!ingredient) {
+        const error = new Error('Ingredient not found');
+        error.statusCode = 404;
+        throw error;
+      }
+
+      const purchase = ingredient.purchases.id(req.params.purchaseId);
+      if (!purchase) {
+        const error = new Error('Stock-in record not found');
+        error.statusCode = 404;
+        throw error;
+      }
+
+      const difference = quantity - purchase.quantity;
+      if (difference < 0 && ingredient.quantity < -difference) {
+        const error = new Error('This stock-in quantity cannot be reduced below the amount already used');
+        error.statusCode = 400;
+        throw error;
+      }
+
+      ingredient.quantity += difference;
+      purchase.quantity = quantity;
+      purchase.unitCost = unitCost;
+      updatedIngredient = await ingredient.save({ session });
+      if (difference !== 0) {
+        await IngredientWithdrawal.updateMany(
+          { ingredient: ingredient._id, createdAt: { $gt: purchase.purchasedAt } },
+          { $inc: { remainingAfter: difference } },
+          { session }
+        );
+      }
+    });
+
+    res.json({ success: true, data: updatedIngredient });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to update stock-in record'
+    });
+  } finally {
+    await session.endSession();
+  }
+});
+
 router.post('/:id/purchases', requirePagePermission('adminIngredients', 'write'), async (req, res) => {
   try {
     const quantity = Number(req.body.quantity);
@@ -192,8 +324,11 @@ router.post('/:id/purchases', requirePagePermission('adminIngredients', 'write')
       { _id: req.params.id, isArchived: { $ne: true } },
       {
         $inc: { quantity },
-        $set: { supplier: String(req.body.supplier || ''), unitPrice: unitCost },
-        $push: { purchases: { quantity, unitCost, supplier: String(req.body.supplier || ''), purchasedBy: req.user._id } }
+        $set: {
+          supplier: req.user.name || '',
+          unitPrice: unitCost,
+        },
+        $push: { purchases: { quantity, unitCost, supplier: req.user.name || '', purchasedBy: req.user._id } }
       },
       { new: true, runValidators: true }
     );
@@ -209,7 +344,6 @@ router.patch('/:id', requirePagePermission('adminIngredients', 'write'), async (
     const updates = {};
     if (req.body.name !== undefined) updates.name = req.body.name;
     if (req.body.unit !== undefined) updates.unit = req.body.unit;
-    if (req.body.supplier !== undefined) updates.supplier = req.body.supplier;
 
     for (const field of ['quantity', 'unitPrice', 'reorderLevel']) {
       if (req.body[field] === undefined) continue;

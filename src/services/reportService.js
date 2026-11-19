@@ -8,6 +8,7 @@
 
 const Order = require('../models/Order');
 const User = require('../models/User');
+const Expense = require('../models/Expense');
 
 // Ethiopia Time. Grouping and day boundaries must follow the cafe's local day,
 // not UTC, or a "daily" report is offset by three hours.
@@ -475,6 +476,13 @@ const getUnifiedReport = async ({ start, end, role, staffId, section } = {}) => 
     staffId ? getStaffDetail(staffId, range.start, range.end) : Promise.resolve(null)
   ]);
 
+  // Total approved operating expenses in range
+  const expenseAgg = await Expense.aggregate([
+    { $match: { approved: true, expenseDate: { $gte: range.start, $lte: range.end } } },
+    { $group: { _id: null, total: { $sum: '$amount' } } }
+  ]);
+  const totalOperatingExpenses = round2(expenseAgg[0]?.total || 0);
+
   const totalsList = wantSales || wantItems ? (facets.totals || []) : [];
   const totals = totalsList[0] || {};
   const totalOrders = totals.totalOrders || 0;
@@ -490,7 +498,10 @@ const getUnifiedReport = async ({ start, end, role, staffId, section } = {}) => 
       revenue: round2(row.revenue)
     }));
 
-  const totalItemRevenue = categoryRows.reduce((sum, row) => sum + row.revenue, 0);
+  const grossSales = paidRevenue;
+  const netTaxableProfit = round2(Math.max(0, grossSales - totalOperatingExpenses));
+  const estimatedTax = round2(netTaxableProfit * 0.30);
+  const takeHomeProfit = round2(netTaxableProfit - estimatedTax);
   const categories = categoryRows.map((row) => ({
     ...row,
     share: totalItemRevenue ? Math.round((row.revenue / totalItemRevenue) * 100) : 0
@@ -554,7 +565,15 @@ const getUnifiedReport = async ({ start, end, role, staffId, section } = {}) => 
     categories,
     topItems,
     staff,
-    staffDetail
+    staffDetail,
+    taxSummary: {
+      grossSales,
+      totalOperatingExpenses,
+      netTaxableProfit,
+      estimatedTax,
+      takeHomeProfit,
+      taxRate: 0.30
+    }
   };
 };
 
