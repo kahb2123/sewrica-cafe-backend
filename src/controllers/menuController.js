@@ -1,4 +1,5 @@
 const MenuItem = require('../models/MenuItem');
+const MenuCategory = require('../models/MenuCategory');
 const fs = require('fs');
 const path = require('path');
 
@@ -347,12 +348,19 @@ const toggleAvailability = async (req, res) => {
 // @access  Public
 const getAllCategories = async (req, res) => {
   try {
-    const categories = await MenuItem.distinct('category', {}, { maxTimeMS: 30000 });
-    for (const category of ['soft-drinks', 'hot-drinks']) {
-      if (!categories.includes(category)) {
-        categories.push(category);
-      }
-    }
+    const builtInCategories = [
+      'burgers', 'sandwiches', 'pizza', 'traditional', 'fastfood', 'wraps',
+      'fetira', 'beverages', 'soft-drinks', 'hot-drinks', 'desserts'
+    ];
+    const [itemCategories, savedCategories] = await Promise.all([
+      MenuItem.distinct('category', {}, { maxTimeMS: 30000 }),
+      MenuCategory.find().select('value').lean()
+    ]);
+    const categories = [...new Set([
+      ...builtInCategories,
+      ...itemCategories,
+      ...savedCategories.map(({ value }) => value)
+    ])];
     
     res.json({
       success: true,
@@ -363,6 +371,48 @@ const getAllCategories = async (req, res) => {
       success: false,
       message: error.message
     });
+  }
+};
+
+const createCategory = async (req, res) => {
+  try {
+    const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
+    const rawValue = name
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
+    const aliases = {
+      'traditional-ethiopian': 'traditional',
+      'fast-food': 'fastfood'
+    };
+    const value = aliases[rawValue] || rawValue;
+
+    if (!name || !value) {
+      return res.status(400).json({ success: false, message: 'Enter a valid category name' });
+    }
+
+    const builtInCategories = new Set([
+      'burgers', 'sandwiches', 'pizza', 'traditional', 'fastfood', 'wraps',
+      'fetira', 'beverages', 'soft-drinks', 'hot-drinks', 'desserts'
+    ]);
+    if (builtInCategories.has(value)) {
+      return res.status(409).json({ success: false, message: 'This category already exists' });
+    }
+
+    const existing = await MenuCategory.findOne({ value });
+    if (existing || await MenuItem.exists({ category: value })) {
+      return res.status(409).json({ success: false, message: 'This category already exists' });
+    }
+
+    const category = await MenuCategory.create({ name, value });
+    res.status(201).json({ success: true, data: category });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ success: false, message: 'This category already exists' });
+    }
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -418,5 +468,6 @@ module.exports = {
   toggleAvailability,
   getInventory,
   updateInventory,
-  getAllCategories
+  getAllCategories,
+  createCategory
 };

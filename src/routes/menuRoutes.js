@@ -12,7 +12,8 @@ const {
   toggleAvailability,
   getInventory,
   updateInventory,
-  getAllCategories
+  getAllCategories,
+  createCategory
 } = require('../controllers/menuController');
 
 // Public routes (no authentication required)
@@ -21,6 +22,7 @@ router.get('/', getAllMenuItems);
 
 // GET /api/menu/categories - Get all unique categories
 router.get('/categories', getAllCategories);
+router.post('/categories', protect, authorize('admin'), createCategory);
 
 // GET /api/menu/category/:category - Get items by specific category
 router.get('/category/:category', getMenuItemsByCategory);
