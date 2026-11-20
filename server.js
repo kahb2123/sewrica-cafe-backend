@@ -163,6 +163,12 @@ io.on('connection', (socket) => {
     console.log(`🚚 Delivery registered: ${deliveryId}`);
   });
 
+  socket.on('register-waiter', (waiterId) => {
+    socket.join(`waiter-${waiterId}`);
+    socket.join('staff-waiter');
+    console.log(`🧑‍🍽️ Waiter registered: ${waiterId}`);
+  });
+
   // Admin registration
   socket.on('register-admin', (adminId) => {
     socket.join('staff-admin');
@@ -193,6 +199,7 @@ mongoose.connect(MONGODB_URI, {
   .then(() => {
     console.log('✅ MongoDB Connected');
     console.log('📊 Database Name:', mongoose.connection.name);
+    startWaiterTaskCleanup();
   })
   .catch(err => {
     console.error('❌ MongoDB Connection Error:', err.message);
@@ -211,6 +218,7 @@ const lotteryRoutes = require('./src/routes/lotteryRoutes');
 const giveawayRoutes = require('./src/routes/giveawayRoutes');
 const ingredientRoutes = require('./src/routes/ingredientRoutes');
 const expenseRoutes = require('./src/routes/expenseRoutes');
+const startWaiterTaskCleanup = require('./src/services/waiterTaskCleanup');
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/menu', menuRoutes);
