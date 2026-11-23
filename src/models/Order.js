@@ -53,6 +53,7 @@ const orderSchema = new mongoose.Schema({
     ref: 'User',
     default: null
   },
+  orderName: String,
   customerName: String,
   customerPhone: String,
   customerEmail: String,

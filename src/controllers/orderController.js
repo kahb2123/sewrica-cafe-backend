@@ -207,11 +207,14 @@ const createOrder = async (req, res) => {
 
 const createStaffOrder = async (req, res) => {
   try {
-    const { items, paymentMethod, deliveryMethod, customerInfo = {}, deliveryAddress = {}, tableNumber: submittedTableNumber } = req.body;
+    const { items, paymentMethod, deliveryMethod, orderName: submittedOrderName, customerInfo = {}, deliveryAddress = {}, tableNumber: submittedTableNumber } = req.body;
     const validPaymentMethods = ['cash', 'card', 'tele_birr', 'bank'];
     const customerDetails = customerInfo && typeof customerInfo === 'object' ? customerInfo : {};
     const addressDetails = deliveryAddress && typeof deliveryAddress === 'object' ? deliveryAddress : {};
     const customerName = typeof customerDetails.name === 'string' ? customerDetails.name.trim() : '';
+    const orderName = typeof submittedOrderName === 'string'
+      ? submittedOrderName.trim()
+      : customerName;
     const customerPhone = typeof customerDetails.phone === 'string' ? customerDetails.phone.trim() : '';
     const tableNumberValue = submittedTableNumber ?? customerDetails.tableNumber;
     const tableNumber = typeof tableNumberValue === 'string' ? tableNumberValue.trim() : '';
@@ -287,7 +290,8 @@ const createStaffOrder = async (req, res) => {
           createdAt: now,
           customer: null,
           createdBy: req.user._id,
-          customerName: customerName || (deliveryMethod === 'dine-in' ? 'Dine-in customer' : 'Guest'),
+          orderName,
+          customerName: orderName || customerName || (deliveryMethod === 'dine-in' ? 'Dine-in customer' : 'Guest'),
           customerPhone,
           customerEmail: '',
           tableNumber: deliveryMethod === 'dine-in' ? tableNumber : '',
@@ -332,7 +336,8 @@ const createStaffOrder = async (req, res) => {
       io.to('staff-admin').to('staff-cashier').to('staff-cook').emit('new-order', {
         orderId: order._id,
         orderNumber: order.dailyOrderNumber || order.orderNumber,
-        customerName: order.customerName,
+        customerName: order.orderName || order.customerName,
+        orderName: order.orderName,
         totalAmount: order.totalAmount,
         createdAt: order.createdAt,
         paymentStatus: order.paymentStatus,
@@ -352,6 +357,7 @@ const createStaffOrder = async (req, res) => {
         status: order.status,
         paymentMethod: order.paymentMethod,
         paymentStatus: order.paymentStatus,
+        orderName: order.orderName,
         createdAt: order.createdAt
       }
     });
