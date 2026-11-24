@@ -502,6 +502,7 @@ const getUnifiedReport = async ({ start, end, role, staffId, section } = {}) => 
   const netTaxableProfit = round2(Math.max(0, grossSales - totalOperatingExpenses));
   const estimatedTax = round2(netTaxableProfit * 0.30);
   const takeHomeProfit = round2(netTaxableProfit - estimatedTax);
+  const totalItemRevenue = categoryRows.reduce((total, row) => total + row.revenue, 0);
   const categories = categoryRows.map((row) => ({
     ...row,
     share: totalItemRevenue ? Math.round((row.revenue / totalItemRevenue) * 100) : 0
