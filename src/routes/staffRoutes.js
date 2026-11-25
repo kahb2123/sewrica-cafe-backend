@@ -1102,7 +1102,6 @@ router.post('/orders/:orderId/assign-chef',
 router.post('/orders/:orderId/assign-delivery',
   requireDashboardPage('write'),
   requirePagePermission('staffOrdersCooking', 'write'),
-  requireRole('admin'),
   async (req, res) => {
     try {
       const { orderId } = req.params;
@@ -1152,6 +1151,64 @@ router.post('/orders/:orderId/assign-delivery',
     } catch (error) {
       console.error('Assign delivery error:', error);
       res.status(500).json({ message: 'Failed to assign delivery person' });
+    }
+  }
+);
+
+router.post('/orders/:orderId/assign-waiter',
+  requireDashboardPage('write'),
+  requirePagePermission('staffOrdersCooking', 'write'),
+  async (req, res) => {
+    try {
+      const { orderId } = req.params;
+      const { waiterId } = req.body;
+
+      if (!mongoose.Types.ObjectId.isValid(orderId) || !mongoose.Types.ObjectId.isValid(waiterId)) {
+        return res.status(400).json({ success: false, message: 'Valid order and waiter IDs are required' });
+      }
+
+      const [order, waiter] = await Promise.all([
+        Order.findById(orderId),
+        User.findOne({ _id: waiterId, role: 'waiter', isActive: true })
+      ]);
+      if (!order) {
+        return res.status(404).json({ success: false, message: 'Order not found' });
+      }
+      if (!waiter) {
+        return res.status(400).json({ success: false, message: 'Waiter not found or not available' });
+      }
+      if (order.status === 'cancelled' || order.waiterCompletedAt) {
+        return res.status(409).json({ success: false, message: 'Cancelled or completed waiter tasks cannot be assigned' });
+      }
+
+      order.assignedWaiter = waiter._id;
+      if (!order.assignedAt) order.assignedAt = {};
+      order.assignedAt.waiter = new Date();
+      await order.save();
+      await order.populate('assignedWaiter', 'name email');
+
+      const io = req.app.get('io');
+      if (io) {
+        io.to(`waiter-${waiter._id}`).emit('order-assigned', {
+          orderId: order._id,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
+          waiterName: waiter.name
+        });
+        io.to('staff-admin').emit('order-assigned-waiter', {
+          orderId: order._id,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
+          waiterName: waiter.name
+        });
+      }
+
+      res.json({
+        success: true,
+        message: `Order assigned to waiter ${waiter.name}`,
+        order
+      });
+    } catch (error) {
+      console.error('Assign waiter error:', error);
+      res.status(500).json({ success: false, message: 'Failed to assign waiter' });
     }
   }
 );
