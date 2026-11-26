@@ -17,6 +17,8 @@ const TZ_OFFSET_HOURS = Number(process.env.BUSINESS_TZ_OFFSET_HOURS ?? 3);
 
 const PAID = 'completed';
 const STAFF_ROLES = ['cook', 'delivery', 'cashier', 'waiter'];
+const REVENUE_ROLES = ['delivery', 'waiter'];
+const hasRevenueAttribution = (role) => REVENUE_ROLES.includes(role);
 
 const MS_PER_HOUR = 60 * 60 * 1000;
 
@@ -275,7 +277,7 @@ const getStaffPerformance = async (start, end, roleFilter) => {
         totalOrders: row.totalOrders || 0,
         completedOrders: row.completed || 0,
         cancelledOrders: row.cancelled || 0,
-        revenue: round2(row.revenue),
+        revenue: hasRevenueAttribution(member.role) ? round2(row.revenue) : 0,
         avgCookingMinutes: row.avgCookingMinutes ? Math.round(row.avgCookingMinutes) : null,
         cashCollected: round2(row.cashCollected || 0),
         completionRate: row.totalOrders ? Math.round((row.completed / row.totalOrders) * 100) : 0
@@ -303,6 +305,7 @@ const getStaffDetail = async (staffId, start, end) => {
   if (!member) return null;
 
   const role = member.role;
+  const includeRevenue = hasRevenueAttribution(role);
   const assignmentField = role === 'cook'
     ? 'assignedChef'
     : role === 'delivery'
@@ -413,8 +416,8 @@ const getStaffDetail = async (staffId, start, end) => {
       cancelledOrders,
       unpaidOrders: Math.max(0, totalOrders - paidOrders - cancelledOrders),
       paidOrders,
-      paidRevenue: round2(daily.reduce((sum, row) => sum + (row.paidAmount || 0), 0)),
-      outstandingRevenue: round2(outstandingRevenue),
+      paidRevenue: includeRevenue ? round2(daily.reduce((sum, row) => sum + (row.paidAmount || 0), 0)) : undefined,
+      outstandingRevenue: includeRevenue ? round2(outstandingRevenue) : undefined,
       completionRate: totalOrders ? Math.round((completedOrders / totalOrders) * 100) : 0,
       cancellationRate: totalOrders ? Math.round((cancelledOrders / totalOrders) * 100) : 0,
       totalItemsCooked,
@@ -436,7 +439,7 @@ const getStaffDetail = async (staffId, start, end) => {
       count: row.count,
       completed: row.completed,
       cancelled: row.cancelled,
-      totalAmount: round2(row.totalAmount),
+      totalAmount: includeRevenue ? round2(row.totalAmount) : undefined,
       avgCookingMinutes: row.avgCookingMinutes ? Math.round(row.avgCookingMinutes) : null
     }])),
     orders: orders.map((order) => ({
@@ -445,7 +448,7 @@ const getStaffDetail = async (staffId, start, end) => {
       status: order.status,
       paymentStatus: order.paymentStatus,
       paymentMethod: order.paymentMethod,
-      totalAmount: round2(order.totalAmount),
+      totalAmount: includeRevenue ? round2(order.totalAmount) : undefined,
       createdAt: order.createdAt,
       assignedAt: order.assignedAt?.chef || order.assignedAt?.delivery || order.paidAt || order.createdAt,
       completedAt: order.deliveryCompletedAt || order.cookingCompletedAt || null,
@@ -653,6 +656,7 @@ const buildCsv = (report) => {
     if (report.staffDetail) {
       const detail = report.staffDetail;
       const summary = detail.summary || {};
+      const includeRevenue = hasRevenueAttribution(detail.role);
       rows.push(
         ['INDIVIDUAL STAFF REPORT'],
         ['Name', detail.name],
@@ -665,8 +669,10 @@ const buildCsv = (report) => {
         ['Completed orders', summary.completedOrders],
         ['Cancelled orders', summary.cancelledOrders],
         ['Completion rate (%)', summary.completionRate],
-        ['Paid revenue (ETB)', summary.paidRevenue],
-        ['Outstanding revenue (ETB)', summary.outstandingRevenue],
+        ...(includeRevenue ? [
+          ['Paid revenue (ETB)', summary.paidRevenue],
+          ['Outstanding revenue (ETB)', summary.outstandingRevenue]
+        ] : []),
         ['Items handled', summary.totalItemsCooked],
         [],
         ['ITEMS HANDLED'],
@@ -674,19 +680,25 @@ const buildCsv = (report) => {
         ...Object.entries(detail.itemsBreakdown || {}),
         [],
         ['DAILY PERFORMANCE'],
-        ['Date', 'Orders', 'Completed', 'Cancelled', 'Order value (ETB)', 'Avg cooking (min)'],
+        includeRevenue
+          ? ['Date', 'Orders', 'Completed', 'Cancelled', 'Order value (ETB)', 'Avg cooking (min)']
+          : ['Date', 'Orders', 'Completed', 'Cancelled', 'Avg cooking (min)'],
         ...Object.entries(detail.dailyBreakdown || {}).map(([date, day]) => [
-          date, day.count, day.completed, day.cancelled, day.totalAmount, day.avgCookingMinutes
+          date, day.count, day.completed, day.cancelled,
+          ...(includeRevenue ? [day.totalAmount] : []),
+          day.avgCookingMinutes
         ]),
         [],
         ['RECENT ORDERS (UP TO 60)'],
-        ['Order #', 'Date', 'Status', 'Payment status', 'Amount (ETB)', 'Items'],
+        includeRevenue
+          ? ['Order #', 'Date', 'Status', 'Payment status', 'Amount (ETB)', 'Items']
+          : ['Order #', 'Date', 'Status', 'Payment status', 'Items'],
         ...(detail.orders || []).map((order) => [
           order.dailyOrderNumber || order.orderNumber,
           order.createdAt ? new Date(order.createdAt).toISOString() : '',
           order.status,
           order.paymentStatus,
-          order.totalAmount,
+          ...(includeRevenue ? [order.totalAmount] : []),
           (order.items || []).map((item) => `${item.name} x ${item.quantity}`).join('; ')
         ]),
         []
@@ -697,7 +709,7 @@ const buildCsv = (report) => {
         ['Name', 'Role', 'Total orders', 'Completed', 'Cancelled', 'Revenue (ETB)', 'Completion %'],
         ...report.staff.map((row) => [
           row.name, row.role, row.totalOrders, row.completedOrders,
-          row.cancelledOrders, row.revenue, row.completionRate
+          row.cancelledOrders, hasRevenueAttribution(row.role) ? row.revenue : '', row.completionRate
         ]),
         []
       );
@@ -909,11 +921,14 @@ const buildPdf = (report, PDFDocument) => {
 
   if (report.staffDetail) {
     const summary = report.staffDetail.summary || {};
+    const includeRevenue = hasRevenueAttribution(report.staffDetail.role);
     drawCards([
       { label: 'Orders handled', value: (summary.totalOrders || 0).toLocaleString('en-ET'), color: '#2f6fb5' },
       { label: 'Completed', value: (summary.completedOrders || 0).toLocaleString('en-ET'), sub: `${summary.completionRate || 0}% completion`, color: '#1f6f5c' },
-      { label: 'Paid revenue', value: money(summary.paidRevenue), color: '#1f6f5c' },
-      { label: 'Outstanding', value: money(summary.outstandingRevenue), color: '#c08420' },
+      ...(includeRevenue ? [
+        { label: 'Paid revenue', value: money(summary.paidRevenue), color: '#1f6f5c' },
+        { label: 'Outstanding', value: money(summary.outstandingRevenue), color: '#c08420' }
+      ] : []),
       { label: 'Cancelled', value: (summary.cancelledOrders || 0).toLocaleString('en-ET'), color: '#b3402a' },
       { label: 'Items handled', value: (summary.totalItemsCooked || 0).toLocaleString('en-ET'), color: '#6b4fa8' }
     ]);
@@ -1016,6 +1031,7 @@ const buildPdf = (report, PDFDocument) => {
   if (wantStaff) {
     if (report.staffDetail) {
       const detail = report.staffDetail;
+      const includeRevenue = hasRevenueAttribution(detail.role);
       drawSectionTitle('Staff profile');
       doc.fillColor(PDF_COLORS.body).fontSize(9).font('Helvetica')
         .text(`Name: ${detail.name || '—'}     Role: ${detail.role || '—'}`, PDF_MARGIN, doc.y);
@@ -1044,7 +1060,7 @@ const buildPdf = (report, PDFDocument) => {
         orders: day.count,
         completed: day.completed,
         cancelled: day.cancelled,
-        orderValue: money(day.totalAmount),
+        ...(includeRevenue ? { orderValue: money(day.totalAmount) } : {}),
         avgCooking: day.avgCookingMinutes == null ? '—' : `${day.avgCookingMinutes} min`
       }));
       drawSectionTitle('Daily performance');
@@ -1053,8 +1069,8 @@ const buildPdf = (report, PDFDocument) => {
         { key: 'orders', label: 'Orders', width: 0.13, align: 'right' },
         { key: 'completed', label: 'Done', width: 0.13, align: 'right' },
         { key: 'cancelled', label: 'Cancelled', width: 0.14, align: 'right' },
-        { key: 'orderValue', label: 'Order value', width: 0.24, align: 'right' },
-        { key: 'avgCooking', label: 'Avg cook', width: 0.17, align: 'right' }
+        ...(includeRevenue ? [{ key: 'orderValue', label: 'Order value', width: 0.24, align: 'right' }] : []),
+        { key: 'avgCooking', label: 'Avg cook', width: includeRevenue ? 0.17 : 0.41, align: 'right' }
       ], dailyRows);
 
       const recentOrders = (detail.orders || []).map((order) => ({
@@ -1062,7 +1078,7 @@ const buildPdf = (report, PDFDocument) => {
         date: order.createdAt ? new Date(order.createdAt).toLocaleDateString('en-GB') : '—',
         status: order.status || '—',
         payment: order.paymentStatus || '—',
-        amount: money(order.totalAmount),
+        ...(includeRevenue ? { amount: money(order.totalAmount) } : {}),
         items: (order.items || []).map((item) => `${item.name} x${item.quantity}`).join(', ') || '—'
       }));
       drawSectionTitle('Recent orders', `Most recent ${recentOrders.length} orders in the selected period`);
@@ -1071,11 +1087,11 @@ const buildPdf = (report, PDFDocument) => {
         { key: 'date', label: 'Date', width: 0.13 },
         { key: 'status', label: 'Status', width: 0.13 },
         { key: 'payment', label: 'Payment', width: 0.15 },
-        { key: 'amount', label: 'Amount', width: 0.18, align: 'right' },
-        { key: 'items', label: 'Items', width: 0.25 }
+        ...(includeRevenue ? [{ key: 'amount', label: 'Amount', width: 0.18, align: 'right' }] : []),
+        { key: 'items', label: 'Items', width: includeRevenue ? 0.25 : 0.43 }
       ], recentOrders);
     } else if (report.staff.length) {
-      drawSectionTitle('Staff performance', 'Order value is attributed to staff associated with each handled order');
+      drawSectionTitle('Staff performance', 'Revenue is attributed only to waiters and delivery staff');
       drawTable(
         [
           { key: 'name', label: 'Name', width: 0.28 },
@@ -1088,7 +1104,7 @@ const buildPdf = (report, PDFDocument) => {
         ],
         report.staff.map((row) => ({
           ...row,
-          revenue: money(row.revenue),
+          revenue: hasRevenueAttribution(row.role) ? money(row.revenue) : '—',
           completionRate: `${row.completionRate}%`
         }))
       );

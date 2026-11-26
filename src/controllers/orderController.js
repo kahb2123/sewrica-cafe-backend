@@ -414,6 +414,12 @@ const updateOrderStatus = async (req, res) => {
     console.log('   Current Status:', currentStatus);
     console.log('   Order Number:', order.orderNumber);
 
+    if (status === 'cancelled' && ['ready', 'out-for-delivery', 'delivered'].includes(currentStatus)) {
+      return res.status(400).json({
+        message: 'Orders cannot be rejected after the kitchen marks them ready'
+      });
+    }
+
     // Define allowed status transitions for each role
     const allowedTransitions = {
       admin: {
@@ -421,8 +427,8 @@ const updateOrderStatus = async (req, res) => {
         confirmed: ['preparing', 'cancelled'],
         preparing: ['cooking', 'ready', 'cancelled'],  // ← FIXED: Added 'ready'
         cooking: ['ready', 'cancelled'],
-        ready: ['out-for-delivery', 'delivered', 'cancelled'],
-        'out-for-delivery': ['delivered', 'cancelled'],
+        ready: ['out-for-delivery', 'delivered'],
+        'out-for-delivery': ['delivered'],
         delivered: [],
         cancelled: []
       },
@@ -431,8 +437,8 @@ const updateOrderStatus = async (req, res) => {
         confirmed: ['preparing', 'cancelled'],
         preparing: ['cooking', 'ready', 'cancelled'],  // ← FIXED: Added 'ready'
         cooking: ['ready', 'cancelled'],
-        ready: ['out-for-delivery', 'delivered', 'cancelled'],
-        'out-for-delivery': ['delivered', 'cancelled'],
+        ready: ['out-for-delivery', 'delivered'],
+        'out-for-delivery': ['delivered'],
         delivered: [],
         cancelled: []
       },
