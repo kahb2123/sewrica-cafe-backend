@@ -283,72 +283,81 @@ router.post('/orders/:orderId/assign-delivery', async (req, res) => {
     const { orderId } = req.params;
     const { deliveryId, notes } = req.body;
 
-    console.log('🚚 Assigning delivery to order:', orderId);
-    console.log('   Delivery ID:', deliveryId);
-    console.log('   Notes:', notes);
+    if (!mongoose.Types.ObjectId.isValid(orderId)
+      || (deliveryId && !mongoose.Types.ObjectId.isValid(deliveryId))) {
+      return res.status(400).json({ success: false, message: 'Valid order and delivery IDs are required' });
+    }
 
     const order = await Order.findById(orderId);
     if (!order) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Order not found' 
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
+    if (order.status === 'cancelled' || order.status === 'delivered' || order.deliveryCompletedAt) {
+      return res.status(409).json({ success: false, message: 'Cancelled or completed delivery tasks cannot be assigned' });
+    }
+
+    if (deliveryId && order.assignedWaiter) {
+      return res.status(409).json({
+        success: false,
+        message: 'An order cannot be assigned to both a waiter and a delivery person'
       });
     }
 
-    const delivery = await User.findOne({ _id: deliveryId, role: 'delivery', isActive: true });
-    if (!delivery) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Delivery person not found or not available' 
-      });
+    const delivery = deliveryId
+      ? await User.findOne({ _id: deliveryId, role: 'delivery', isActive: true })
+      : null;
+    if (deliveryId && !delivery) {
+      return res.status(400).json({ success: false, message: 'Delivery person not found or not available' });
     }
 
-    if (order.assignedDelivery && order.assignedDelivery.toString() !== deliveryId) {
-      // Reassignment allowed for admin
-    }
-
-    const isReassignment = order.assignedDelivery && order.assignedDelivery.toString() !== deliveryId;
-
-    order.assignedDelivery = deliveryId;
+    const isReassignment = delivery
+      && order.assignedDelivery
+      && order.assignedDelivery.toString() !== deliveryId;
+    order.assignedDelivery = delivery?._id || null;
     if (!order.assignedAt) order.assignedAt = {};
-    order.assignedAt.delivery = new Date();
-    if (notes) order.deliveryNotes = notes;
+    order.assignedAt.delivery = delivery ? new Date() : null;
+    if (delivery && notes) order.deliveryNotes = notes;
     
-    if (!order.statusHistory) order.statusHistory = [];
-    order.statusHistory.push({
-      status: 'ready',
-      changedBy: req.user._id,
-      changedAt: new Date(),
-       notes: `Assigned to delivery: ${delivery.name}${notes ? ` (${notes})` : ''}${isReassignment ? ' (Reassigned)' : ''}`
-    });
+    if (delivery) {
+      if (!order.statusHistory) order.statusHistory = [];
+      order.statusHistory.push({
+        status: 'ready',
+        changedBy: req.user._id,
+        changedAt: new Date(),
+        notes: `Assigned to delivery: ${delivery.name}${notes ? ` (${notes})` : ''}${isReassignment ? ' (Reassigned)' : ''}`
+      });
+    }
 
     await order.save();
     await order.populate('customer', 'name email phone address');
     await order.populate('assignedDelivery', 'name email phone');
+    await order.populate('assignedWaiter', 'name email');
 
     const io = req.app.get('io');
     if (io) {
-      io.to(`delivery-${deliveryId}`).emit('order-assigned', {
+      if (delivery) {
+        io.to(`delivery-${delivery._id}`).emit('order-assigned', {
+          orderId: order._id,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
+          customerName: order.customerName,
+          customerPhone: order.customerPhone,
+          deliveryAddress: order.deliveryAddress,
+          totalAmount: order.totalAmount,
+          items: order.items.map(item => ({ name: item.name, quantity: item.quantity })),
+          assignedAt: order.assignedAt.delivery
+        });
+      }
+
+      io.to('staff-admin').to('staff-cashier').emit('order-updated', {
         orderId: order._id,
         orderNumber: order.dailyOrderNumber || order.orderNumber,
-        customerName: order.customerName,
-        customerPhone: order.customerPhone,
-        deliveryAddress: order.deliveryAddress,
-        totalAmount: order.totalAmount,
-        items: order.items.map(item => ({ name: item.name, quantity: item.quantity })),
-        assignedAt: order.assignedAt.delivery
-      });
-      
-      io.to('staff-admin').emit('order-assigned-delivery', {
-        orderId: order._id,
-        orderNumber: order.dailyOrderNumber || order.orderNumber,
-        deliveryName: delivery.name
+        assignedDelivery: order.assignedDelivery?._id || null
       });
     }
 
     res.json({
       success: true,
-      message: `Order assigned to delivery person ${delivery.name}`,
+      message: delivery ? `Order assigned to delivery person ${delivery.name}` : 'Delivery assignment cleared',
       order
     });
   } catch (error) {
@@ -368,47 +377,58 @@ router.post('/orders/:orderId/assign-waiter', async (req, res) => {
     const { orderId } = req.params;
     const { waiterId } = req.body;
 
-    if (!mongoose.Types.ObjectId.isValid(orderId) || !mongoose.Types.ObjectId.isValid(waiterId)) {
+    if (!mongoose.Types.ObjectId.isValid(orderId)
+      || (waiterId && !mongoose.Types.ObjectId.isValid(waiterId))) {
       return res.status(400).json({ success: false, message: 'Valid order and waiter IDs are required' });
     }
 
     const [order, waiter] = await Promise.all([
       Order.findById(orderId),
-      User.findOne({ _id: waiterId, role: 'waiter', isActive: true })
+      waiterId ? User.findOne({ _id: waiterId, role: 'waiter', isActive: true }) : null
     ]);
     if (!order) {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
-    if (!waiter) {
+    if (waiterId && !waiter) {
       return res.status(400).json({ success: false, message: 'Waiter not found or not available' });
     }
-    if (order.status === 'cancelled' || order.waiterCompletedAt) {
+    if (order.status === 'cancelled' || order.status === 'delivered' || order.waiterCompletedAt) {
       return res.status(409).json({ success: false, message: 'Cancelled or completed waiter tasks cannot be assigned' });
     }
+    if (waiter && order.assignedDelivery) {
+      return res.status(409).json({
+        success: false,
+        message: 'An order cannot be assigned to both a waiter and a delivery person'
+      });
+    }
 
-    order.assignedWaiter = waiter._id;
+    order.assignedWaiter = waiter?._id || null;
     if (!order.assignedAt) order.assignedAt = {};
-    order.assignedAt.waiter = new Date();
+    order.assignedAt.waiter = waiter ? new Date() : null;
     await order.save();
+    await order.populate('assignedChef', 'name');
+    await order.populate('assignedDelivery', 'name');
     await order.populate('assignedWaiter', 'name email');
 
     const io = req.app.get('io');
     if (io) {
-      io.to(`waiter-${waiter._id}`).emit('order-assigned', {
+      if (waiter) {
+        io.to(`waiter-${waiter._id}`).emit('order-assigned', {
+          orderId: order._id,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
+          waiterName: waiter.name
+        });
+      }
+      io.to('staff-admin').to('staff-cashier').emit('order-updated', {
         orderId: order._id,
         orderNumber: order.dailyOrderNumber || order.orderNumber,
-        waiterName: waiter.name
-      });
-      io.to('staff-admin').emit('order-assigned-waiter', {
-        orderId: order._id,
-        orderNumber: order.dailyOrderNumber || order.orderNumber,
-        waiterName: waiter.name
+        assignedWaiter: order.assignedWaiter?._id || null
       });
     }
 
     res.json({
       success: true,
-      message: `Order assigned to waiter ${waiter.name}`,
+      message: waiter ? `Order assigned to waiter ${waiter.name}` : 'Waiter assignment cleared',
       order
     });
   } catch (error) {
