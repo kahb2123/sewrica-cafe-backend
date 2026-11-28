@@ -8,6 +8,7 @@ const mongoose = require('mongoose');
 const { updateOrderStatus } = require('../controllers/orderController');
 const Order = require('../models/Order');
 const User = require('../models/User');
+const MAX_DELIVERY_BATCH_ORDER_COUNT = 500;
 
 const normalizeLocation = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
 const getOrderLocationKey = (order) => {
@@ -248,8 +249,11 @@ router.post('/orders/delivery-complete-batch',
   async (req, res) => {
     try {
       const { orderIds } = req.body;
-      if (!Array.isArray(orderIds) || orderIds.length === 0 || orderIds.length > 100) {
-        return res.status(400).json({ success: false, message: 'Provide between 1 and 100 orders to complete' });
+      if (!Array.isArray(orderIds) || orderIds.length === 0 || orderIds.length > MAX_DELIVERY_BATCH_ORDER_COUNT) {
+        return res.status(400).json({
+          success: false,
+          message: `Provide between 1 and ${MAX_DELIVERY_BATCH_ORDER_COUNT} orders to complete`
+        });
       }
       const ids = [...new Set(orderIds.map(String))];
       if (ids.length !== orderIds.length || ids.some((id) => !mongoose.Types.ObjectId.isValid(id))) {
