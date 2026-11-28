@@ -16,6 +16,7 @@ test('menu and staff report totals use paid sales without top-item or staff-attr
       totalOrders: 5,
       paidOrders: 3,
       paidRevenue: 58855,
+      unitsSold: 293,
       cancelledOrders: 1,
       outstandingRevenue: 0,
       refundedValue: 0
@@ -49,6 +50,7 @@ test('menu and staff report totals use paid sales without top-item or staff-attr
         totalOrders: 5,
         paidOrders: 3,
         paidRevenue: 58855,
+        unitsSold: 293,
         cancelledOrders: 1,
         outstandingRevenue: 0,
         refundedValue: 0
@@ -60,12 +62,16 @@ test('menu and staff report totals use paid sales without top-item or staff-attr
     if (!staffRole) return [];
 
     const group = pipeline.find((stage) => stage.$group)?.$group;
-    staffRevenuePipelines.push({ staffRole, revenue: group.revenue });
+    staffRevenuePipelines.push({
+      staffRole,
+      revenue: group.revenue,
+      unitsSold: group.unitsSold
+    });
     if (staffRole === 'assignedDelivery') {
       return [{ _id: deliveryId, totalOrders: 1, revenue: 20000 }];
     }
     if (staffRole === 'assignedWaiter') {
-      return [{ _id: waiterId, totalOrders: 1, revenue: 58535 }];
+      return [{ _id: waiterId, totalOrders: 1, revenue: 58535, unitsSold: 161 }];
     }
     return [];
   };
@@ -89,9 +95,12 @@ test('menu and staff report totals use paid sales without top-item or staff-attr
   });
 
   assert.equal(itemsReport.totals.paidRevenue, 58855);
+  assert.equal(itemsReport.totals.unitsSold, 293);
   assert.equal(itemsReport.itemSummary.unitsSold, 293);
   assert.equal(itemsReport.topItems.length, 15);
   assert.equal(staffReport.totals.paidRevenue, 58855);
+  assert.equal(staffReport.totals.unitsSold, 293);
+  assert.equal(staffReport.staff.find((row) => row.staffId === waiterId).unitsSold, 161);
   assert.equal(
     staffReport.staff.reduce((sum, row) => sum + row.revenue, 0),
     78535,
@@ -100,9 +109,15 @@ test('menu and staff report totals use paid sales without top-item or staff-attr
   assert.equal(itemFacetPipeline.itemTotals[0].$match.paymentStatus, 'completed');
   assert.equal(itemFacetPipeline.topItems[0].$match.paymentStatus, 'completed');
   assert.equal(itemFacetPipeline.categories[0].$match.paymentStatus, 'completed');
+  assert.equal(itemFacetPipeline.totals[0].$group.unitsSold.$sum.$cond[0].$eq[1], 'completed');
   assert.equal(staffRevenuePipelines.length, 4);
   assert.ok(staffRevenuePipelines.some(({ staffRole }) => staffRole === 'assignedWaiter'));
   assert.ok(!staffRevenuePipelines.some(({ staffRole }) => staffRole === 'createdBy'));
+  for (const { unitsSold } of staffRevenuePipelines) {
+    assert.equal(unitsSold.$sum.$cond[0].$eq[1], 'completed');
+    assert.deepEqual(unitsSold.$sum.$cond[1].$reduce.input.$ifNull, ['$items', []]);
+    assert.equal(unitsSold.$sum.$cond[1].$reduce.in.$add[1].$ifNull[0], '$$this.quantity');
+  }
   for (const { revenue } of staffRevenuePipelines) {
     assert.equal(revenue.$sum.$cond[0].$eq[1], 'completed');
   }
@@ -117,6 +132,7 @@ test('waiter detail uses the same assigned orders as the waiter task page', asyn
   const originalExpenseAggregate = Expense.aggregate;
   let orderMatch;
   let firstAssignmentMatch;
+  const aggregateMatches = [];
 
   t.after(() => {
     Order.aggregate = originalOrderAggregate;
@@ -127,7 +143,10 @@ test('waiter detail uses the same assigned orders as the waiter task page', asyn
     Expense.aggregate = originalExpenseAggregate;
   });
 
-  Order.aggregate = async () => [];
+  Order.aggregate = async (pipeline) => {
+    aggregateMatches.push(pipeline[0].$match);
+    return [];
+  };
   Order.find = (match) => {
     orderMatch = match;
     return {
@@ -155,5 +174,9 @@ test('waiter detail uses the same assigned orders as the waiter task page', asyn
 
   assert.equal(orderMatch.assignedWaiter, 'waiter-id');
   assert.equal(firstAssignmentMatch.assignedWaiter, 'waiter-id');
+  assert.ok(aggregateMatches.some((match) => match.paymentStatus === 'completed'));
+  assert.ok(aggregateMatches.some(
+    (match) => match.assignedWaiter === 'waiter-id' && !Object.hasOwn(match, 'paymentStatus')
+  ));
   assert.equal(Object.hasOwn(orderMatch, 'createdBy'), false);
 });

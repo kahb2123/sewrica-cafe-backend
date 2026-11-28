@@ -66,6 +66,22 @@ const hourString = (field) => ({
 
 const round2 = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
+const paidUnitsSum = () => ({
+  $sum: {
+    $cond: [
+      { $eq: ['$paymentStatus', PAID] },
+      {
+        $reduce: {
+          input: { $ifNull: ['$items', []] },
+          initialValue: 0,
+          in: { $add: ['$$value', { $ifNull: ['$$this.quantity', 0] }] }
+        }
+      },
+      0
+    ]
+  }
+});
+
 const orderTotalsGroup = () => ({
   _id: null,
   totalOrders: { $sum: 1 },
@@ -75,6 +91,7 @@ const orderTotalsGroup = () => ({
   paidRevenue: {
     $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, { $ifNull: ['$totalAmount', 0] }, 0] }
   },
+  unitsSold: paidUnitsSum(),
   outstandingRevenue: {
     $sum: {
       $cond: [
@@ -214,6 +231,7 @@ const getStaffPerformance = async (start, end, roleFilter) => {
           revenue: {
             $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, { $ifNull: ['$totalAmount', 0] }, 0] }
           },
+          unitsSold: paidUnitsSum(),
           avgCookingMinutes: { $avg: { $cond: [{ $gt: ['$cookingTime', 0] }, '$cookingTime', null] } }
         }
       }
@@ -228,7 +246,8 @@ const getStaffPerformance = async (start, end, roleFilter) => {
           cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
           revenue: {
             $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, { $ifNull: ['$totalAmount', 0] }, 0] }
-          }
+          },
+          unitsSold: paidUnitsSum()
         }
       }
     ]),
@@ -254,7 +273,8 @@ const getStaffPerformance = async (start, end, roleFilter) => {
           revenue: {
             $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, { $ifNull: ['$totalAmount', 0] }, 0] }
           },
-          cashCollected: { $sum: { $ifNull: ['$amountReceived', 0] } }
+          cashCollected: { $sum: { $ifNull: ['$amountReceived', 0] } },
+          unitsSold: paidUnitsSum()
         }
       }
     ]),
@@ -268,7 +288,8 @@ const getStaffPerformance = async (start, end, roleFilter) => {
           cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
           revenue: {
             $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, { $ifNull: ['$totalAmount', 0] }, 0] }
-          }
+          },
+          unitsSold: paidUnitsSum()
         }
       }
     ])
@@ -298,6 +319,7 @@ const getStaffPerformance = async (start, end, roleFilter) => {
         completedOrders: row.completed || 0,
         cancelledOrders: row.cancelled || 0,
         revenue: hasRevenueAttribution(member.role) ? round2(row.revenue) : 0,
+        unitsSold: row.unitsSold || 0,
         avgCookingMinutes: row.avgCookingMinutes ? Math.round(row.avgCookingMinutes) : null,
         cashCollected: round2(row.cashCollected || 0),
         completionRate: row.totalOrders ? Math.round((row.completed / row.totalOrders) * 100) : 0
@@ -340,7 +362,7 @@ const getStaffDetail = async (staffId, start, end) => {
 
   const [items, daily, orders, assignedAt] = await Promise.all([
     Order.aggregate([
-      { $match: match },
+      { $match: { ...match, paymentStatus: PAID } },
       { $unwind: '$items' },
       { $group: { _id: { $ifNull: ['$items.name', 'Unknown item'] }, count: { $sum: '$items.quantity' } } },
       { $sort: { count: -1 } }
@@ -416,7 +438,7 @@ const getStaffDetail = async (staffId, start, end) => {
   const paidOrders = daily.reduce((sum, row) => sum + row.paid, 0);
   const totalAmount = daily.reduce((sum, row) => sum + row.totalAmount, 0);
   const outstandingRevenue = daily.reduce((sum, row) => sum + row.outstanding, 0);
-  const totalItemsCooked = items.reduce((sum, row) => sum + row.count, 0);
+  const unitsSold = items.reduce((sum, row) => sum + row.count, 0);
 
   const cookingTimeSum = daily.reduce((sum, row) => sum + (row.cookingTimeSum || 0), 0);
   const cookingTimeCount = daily.reduce((sum, row) => sum + (row.cookingTimeCount || 0), 0);
@@ -438,9 +460,9 @@ const getStaffDetail = async (staffId, start, end) => {
       paidOrders,
       paidRevenue: includeRevenue ? round2(daily.reduce((sum, row) => sum + (row.paidAmount || 0), 0)) : undefined,
       outstandingRevenue: includeRevenue ? round2(outstandingRevenue) : undefined,
+      unitsSold,
       completionRate: totalOrders ? Math.round((completedOrders / totalOrders) * 100) : 0,
       cancellationRate: totalOrders ? Math.round((cancelledOrders / totalOrders) * 100) : 0,
-      totalItemsCooked,
       totalCookingTime: Math.round(cookingTimeSum / 60000),
       averageCookingTime: cookingTimeCount ? Math.round(cookingTimeSum / cookingTimeCount / 60000) : 0,
       slowestCookingTime: Math.max(
@@ -566,7 +588,8 @@ const getUnifiedReport = async ({ start, end, role, staffId, section } = {}) => 
       outstandingRevenue,
       refundedValue: round2(totals.refundedValue),
       averageOrderValue: paidOrders ? round2(paidRevenue / paidOrders) : 0,
-      avgCookingMinutes: totals.avgCookingMinutes ? Math.round(totals.avgCookingMinutes) : 0
+      avgCookingMinutes: totals.avgCookingMinutes ? Math.round(totals.avgCookingMinutes) : 0,
+      unitsSold: Number(totals.unitsSold) || 0
     },
     daily: ((wantSales ? facets.daily : []) || [])
       .filter((row) => row._id)
@@ -629,6 +652,7 @@ const buildCsv = (report) => {
       ['Cancelled orders', t.cancelledOrders],
       ['Unpaid orders', t.unpaidOrders],
       ['Paid revenue (ETB)', t.paidRevenue],
+      ['Units sold', t.unitsSold],
       ['Outstanding revenue (ETB)', t.outstandingRevenue],
       ['Refunded value (ETB)', t.refundedValue],
       ['Average order value (ETB)', t.averageOrderValue],
@@ -665,7 +689,7 @@ const buildCsv = (report) => {
   if (wantItems) {
     rows.push(
       ['TOP ITEMS'],
-      ['Item', 'Quantity', 'Revenue (ETB)'],
+      ['Item', 'Units sold', 'Revenue (ETB)'],
       ...report.topItems.map((row) => [row.name, row.quantity, row.revenue]),
       [],
       ['SALES BY CATEGORY'],
@@ -696,10 +720,10 @@ const buildCsv = (report) => {
           ['Paid revenue (ETB)', summary.paidRevenue],
           ['Outstanding revenue (ETB)', summary.outstandingRevenue]
         ] : []),
-        ['Items handled', summary.totalItemsCooked],
+        ['Units sold', summary.unitsSold],
         [],
-        ['ITEMS HANDLED'],
-        ['Item', 'Quantity'],
+        ['UNITS SOLD BY ITEM'],
+        ['Item', 'Units sold'],
         ...Object.entries(detail.itemsBreakdown || {}),
         [],
         ['DAILY PERFORMANCE'],
@@ -726,12 +750,13 @@ const buildCsv = (report) => {
         ]),
         []
       );
-    } else {
+    } else if (wantSales || wantItems || wantStaff) {
       rows.push(
         ['STAFF PERFORMANCE'],
-        ['Name', 'Role', 'Total orders', 'Completed', 'Cancelled', 'Revenue (ETB)', 'Completion %'],
+        ['Cafe-wide units sold', report.totals.unitsSold],
+        ['Name', 'Role', 'Total orders', 'Units sold', 'Completed', 'Cancelled', 'Revenue (ETB)', 'Completion %'],
         ...report.staff.map((row) => [
-          row.name, row.role, row.totalOrders, row.completedOrders,
+          row.name, row.role, row.totalOrders, row.unitsSold, row.completedOrders,
           row.cancelledOrders, hasRevenueAttribution(row.role) ? row.revenue : '', row.completionRate
         ]),
         []
@@ -953,11 +978,12 @@ const buildPdf = (report, PDFDocument) => {
         { label: 'Outstanding', value: money(summary.outstandingRevenue), color: '#c08420' }
       ] : []),
       { label: 'Cancelled', value: (summary.cancelledOrders || 0).toLocaleString('en-ET'), color: '#b3402a' },
-      { label: 'Items handled', value: (summary.totalItemsCooked || 0).toLocaleString('en-ET'), color: '#6b4fa8' }
+      { label: 'Units sold', value: (summary.unitsSold || 0).toLocaleString('en-ET'), color: '#6b4fa8' }
     ]);
-  } else if (wantSales || wantItems) {
+  } else {
     drawCards([
       { label: 'Total orders', value: (t.totalOrders || 0).toLocaleString('en-ET'), sub: `${t.paidOrders || 0} paid · ${t.cancelledOrders || 0} cancelled`, color: '#2f6fb5' },
+      { label: 'Units sold', value: (t.unitsSold || 0).toLocaleString('en-ET'), sub: 'Unique units on paid orders', color: '#6b4fa8' },
       { label: 'Paid revenue', value: money(t.paidRevenue), sub: 'Settled payments only', color: '#1f6f5c' },
       { label: 'Outstanding', value: money(t.outstandingRevenue), sub: `${t.unpaidOrders || 0} unpaid orders`, color: '#c08420' },
       { label: 'Average order', value: money(t.averageOrderValue), sub: 'Per paid order', color: '#7d7269' },
@@ -1072,10 +1098,10 @@ const buildPdf = (report, PDFDocument) => {
       const handledItems = Object.entries(detail.itemsBreakdown || {})
         .sort(([, a], [, b]) => Number(b) - Number(a))
         .map(([name, quantity]) => ({ name, quantity: Number(quantity || 0).toLocaleString('en-ET') }));
-      drawSectionTitle('Items handled', 'Item quantities associated with this staff member');
+      drawSectionTitle('Units sold by item', 'Paid item quantities attributed to this staff member');
       drawTable([
         { key: 'name', label: 'Item', width: 0.72 },
-        { key: 'quantity', label: 'Quantity', width: 0.28, align: 'right' }
+        { key: 'quantity', label: 'Units sold', width: 0.28, align: 'right' }
       ], handledItems);
 
       const dailyRows = Object.entries(detail.dailyBreakdown || {}).map(([date, day]) => ({
@@ -1114,16 +1140,17 @@ const buildPdf = (report, PDFDocument) => {
         { key: 'items', label: 'Items', width: includeRevenue ? 0.25 : 0.43 }
       ], recentOrders);
     } else if (report.staff.length) {
-      drawSectionTitle('Staff performance', 'Revenue is attributed only to waiters and delivery staff');
+      drawSectionTitle('Staff performance', 'Units and revenue are attributed to each staff member; totals may overlap');
       drawTable(
         [
-          { key: 'name', label: 'Name', width: 0.28 },
-          { key: 'role', label: 'Role', width: 0.14 },
-          { key: 'totalOrders', label: 'Orders', width: 0.13, align: 'right' },
-          { key: 'completedOrders', label: 'Done', width: 0.11, align: 'right' },
-          { key: 'cancelledOrders', label: 'Cancelled', width: 0.13, align: 'right' },
+          { key: 'name', label: 'Name', width: 0.19 },
+          { key: 'role', label: 'Role', width: 0.12 },
+          { key: 'totalOrders', label: 'Orders', width: 0.1, align: 'right' },
+          { key: 'unitsSold', label: 'Units sold', width: 0.12, align: 'right' },
+          { key: 'completedOrders', label: 'Done', width: 0.1, align: 'right' },
+          { key: 'cancelledOrders', label: 'Cancelled', width: 0.11, align: 'right' },
           { key: 'revenue', label: 'Revenue', width: 0.15, align: 'right' },
-          { key: 'completionRate', label: 'Rate', width: 0.14, align: 'right' }
+          { key: 'completionRate', label: 'Rate', width: 0.11, align: 'right' }
         ],
         report.staff.map((row) => ({
           ...row,
