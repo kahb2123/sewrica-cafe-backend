@@ -380,7 +380,17 @@ const createStaffOrder = async (req, res) => {
 const updateOrderStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, notes } = req.body;
+    const { status, notes, confirmPayment = false } = req.body;
+
+    if (typeof confirmPayment !== 'boolean') {
+      return res.status(400).json({ message: 'confirmPayment must be a boolean' });
+    }
+    if (confirmPayment && status !== 'ready') {
+      return res.status(400).json({ message: 'Payment can only be confirmed when the kitchen marks an order ready' });
+    }
+    if (confirmPayment && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Only an admin can confirm payment from the kitchen display' });
+    }
 
     console.log('📝 Update order status request:');
     console.log('   Order ID:', id);
@@ -403,6 +413,11 @@ const updateOrderStatus = async (req, res) => {
     // Check permissions based on user role
     const userRole = req.user.role;
     const currentStatus = order.status;
+    const paymentWasAlreadyCompleted = order.paymentStatus === 'completed';
+
+    if (confirmPayment && order.paymentStatus === 'refunded') {
+      return res.status(409).json({ message: 'A refunded order cannot be marked paid from the kitchen display' });
+    }
 
     if (currentStatus === status) {
       return res.status(400).json({
@@ -490,7 +505,9 @@ const updateOrderStatus = async (req, res) => {
       status,
       changedBy: req.user._id,
       changedAt: new Date(),
-      notes: notes || `Status changed from ${oldStatus} to ${status} by ${userRole}`
+      notes: confirmPayment && !paymentWasAlreadyCompleted
+        ? `${notes || `Status changed from ${oldStatus} to ${status} by ${userRole}`}; payment confirmed in kitchen display (${order.paymentMethod})`
+        : notes || `Status changed from ${oldStatus} to ${status} by ${userRole}`
     });
 
     // Track cooking time
@@ -502,6 +519,15 @@ const updateOrderStatus = async (req, res) => {
       order.cookingCompletedAt = new Date();
       const diffMs = order.cookingCompletedAt - order.cookingStartedAt;
       order.cookingTime = Math.round(diffMs / 60000);
+    }
+
+    if (confirmPayment && !paymentWasAlreadyCompleted) {
+      const paidAt = new Date();
+      order.paymentStatus = 'completed';
+      order.paidAt = paidAt;
+      order.processedAt = paidAt;
+      order.processedBy = req.user._id;
+      order.processedByName = req.user.name || '';
     }
 
     // Track delivery time

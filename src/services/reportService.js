@@ -66,6 +66,38 @@ const hourString = (field) => ({
 
 const round2 = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
+const orderTotalsGroup = () => ({
+  _id: null,
+  totalOrders: { $sum: 1 },
+  cancelledOrders: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
+  paidOrders: { $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, 1, 0] } },
+  grossValue: { $sum: '$totalAmount' },
+  paidRevenue: {
+    $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, { $ifNull: ['$totalAmount', 0] }, 0] }
+  },
+  outstandingRevenue: {
+    $sum: {
+      $cond: [
+        { $in: ['$paymentStatus', ['pending', 'processing']] },
+        { $ifNull: ['$totalAmount', 0] },
+        0
+      ]
+    }
+  },
+  refundedValue: {
+    $sum: { $cond: [{ $eq: ['$paymentStatus', 'refunded'] }, { $ifNull: ['$totalAmount', 0] }, 0] }
+  },
+  avgCookingMinutes: { $avg: { $cond: [{ $gt: ['$cookingTime', 0] }, '$cookingTime', null] } }
+});
+
+const getOrderTotals = async (start, end) => {
+  const [totals = {}] = await Order.aggregate([
+    { $match: { createdAt: { $gte: start, $lt: end } } },
+    { $group: orderTotalsGroup() }
+  ]);
+  return totals;
+};
+
 // ========== ORDER-LEVEL FIGURES (one round trip) ==========
 
 const getOrderFacets = async (start, end) => {
@@ -76,31 +108,7 @@ const getOrderFacets = async (start, end) => {
     {
       $facet: {
         totals: [
-          {
-            $group: {
-              _id: null,
-              totalOrders: { $sum: 1 },
-              cancelledOrders: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
-              paidOrders: { $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, 1, 0] } },
-              grossValue: { $sum: '$totalAmount' },
-              paidRevenue: {
-                $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, { $ifNull: ['$totalAmount', 0] }, 0] }
-              },
-              outstandingRevenue: {
-                $sum: {
-                  $cond: [
-                    { $in: ['$paymentStatus', ['pending', 'processing']] },
-                    { $ifNull: ['$totalAmount', 0] },
-                    0
-                  ]
-                }
-              },
-              refundedValue: {
-                $sum: { $cond: [{ $eq: ['$paymentStatus', 'refunded'] }, { $ifNull: ['$totalAmount', 0] }, 0] }
-              },
-              avgCookingMinutes: { $avg: { $cond: [{ $gt: ['$cookingTime', 0] }, '$cookingTime', null] } }
-            }
-          }
+          { $group: orderTotalsGroup() }
         ],
 
         daily: [
@@ -146,6 +154,7 @@ const getOrderFacets = async (start, end) => {
         ],
 
         categories: [
+          { $match: { paymentStatus: PAID } },
           { $unwind: '$items' },
           {
             $group: {
@@ -157,7 +166,19 @@ const getOrderFacets = async (start, end) => {
           { $sort: { revenue: -1 } }
         ],
 
+        itemTotals: [
+          { $match: { paymentStatus: PAID } },
+          { $unwind: '$items' },
+          {
+            $group: {
+              _id: null,
+              unitsSold: { $sum: { $ifNull: ['$items.quantity', 0] } }
+            }
+          }
+        ],
+
         topItems: [
+          { $match: { paymentStatus: PAID } },
           { $unwind: '$items' },
           {
             $group: {
@@ -190,7 +211,9 @@ const getStaffPerformance = async (start, end, roleFilter) => {
           totalOrders: { $sum: 1 },
           completed: { $sum: { $cond: [{ $in: ['$status', ['ready', 'delivered']] }, 1, 0] } },
           cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
-          revenue: { $sum: { $ifNull: ['$totalAmount', 0] } },
+          revenue: {
+            $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, { $ifNull: ['$totalAmount', 0] }, 0] }
+          },
           avgCookingMinutes: { $avg: { $cond: [{ $gt: ['$cookingTime', 0] }, '$cookingTime', null] } }
         }
       }
@@ -203,7 +226,9 @@ const getStaffPerformance = async (start, end, roleFilter) => {
           totalOrders: { $sum: 1 },
           completed: { $sum: { $cond: [{ $eq: ['$status', 'delivered'] }, 1, 0] } },
           cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
-          revenue: { $sum: { $ifNull: ['$totalAmount', 0] } }
+          revenue: {
+            $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, { $ifNull: ['$totalAmount', 0] }, 0] }
+          }
         }
       }
     ]),
@@ -226,7 +251,9 @@ const getStaffPerformance = async (start, end, roleFilter) => {
           totalOrders: { $sum: 1 },
           completed: { $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, 1, 0] } },
           cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
-          revenue: { $sum: { $ifNull: ['$totalAmount', 0] } },
+          revenue: {
+            $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, { $ifNull: ['$totalAmount', 0] }, 0] }
+          },
           cashCollected: { $sum: { $ifNull: ['$amountReceived', 0] } }
         }
       }
@@ -248,7 +275,9 @@ const getStaffPerformance = async (start, end, roleFilter) => {
           totalOrders: { $sum: 1 },
           completed: { $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, 1, 0] } },
           cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
-          revenue: { $sum: { $ifNull: ['$totalAmount', 0] } }
+          revenue: {
+            $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, { $ifNull: ['$totalAmount', 0] }, 0] }
+          }
         }
       }
     ])
@@ -473,10 +502,12 @@ const getUnifiedReport = async ({ start, end, role, staffId, section } = {}) => 
   const wantItems = !section || section === 'items';
   const wantStaff = !section || section === 'staff';
 
-  const [facets, staff, staffDetail] = await Promise.all([
-    wantSales || wantItems ? getOrderFacets(range.start, range.end) : Promise.resolve({}),
+  const needsFacets = wantSales || wantItems;
+  const [facets, staff, staffDetail, staffOnlyTotals] = await Promise.all([
+    needsFacets ? getOrderFacets(range.start, range.end) : Promise.resolve({}),
     wantStaff ? getStaffPerformance(range.start, range.end, role) : Promise.resolve([]),
-    staffId ? getStaffDetail(staffId, range.start, range.end) : Promise.resolve(null)
+    staffId ? getStaffDetail(staffId, range.start, range.end) : Promise.resolve(null),
+    wantStaff && !needsFacets ? getOrderTotals(range.start, range.end) : Promise.resolve(null)
   ]);
 
   // Total approved operating expenses in range
@@ -486,8 +517,7 @@ const getUnifiedReport = async ({ start, end, role, staffId, section } = {}) => 
   ]);
   const totalOperatingExpenses = round2(expenseAgg[0]?.total || 0);
 
-  const totalsList = wantSales || wantItems ? (facets.totals || []) : [];
-  const totals = totalsList[0] || {};
+  const totals = (needsFacets ? facets.totals?.[0] : staffOnlyTotals) || {};
   const totalOrders = totals.totalOrders || 0;
   const paidOrders = totals.paidOrders || 0;
   const paidRevenue = round2(totals.paidRevenue);
@@ -517,6 +547,7 @@ const getUnifiedReport = async ({ start, end, role, staffId, section } = {}) => 
       quantity: Number(row.quantity) || 0,
       revenue: round2(row.revenue)
     }));
+  const itemTotals = (wantItems ? facets.itemTotals : [])?.[0] || {};
 
   const paymentMethods = ((wantSales ? facets.paymentMethods : []) || [])
     .filter((row) => row._id)
@@ -568,6 +599,7 @@ const getUnifiedReport = async ({ start, end, role, staffId, section } = {}) => 
       .map((row) => ({ channel: row._id, count: row.count })),
     categories,
     topItems,
+    itemSummary: wantItems ? { unitsSold: Number(itemTotals.unitsSold) || 0 } : undefined,
     staff,
     staffDetail,
     taxSummary: {
