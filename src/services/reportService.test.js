@@ -55,7 +55,7 @@ test('menu and staff report totals use paid sales without top-item or staff-attr
       }];
     }
 
-    const staffRole = ['assignedChef', 'assignedDelivery', 'processedBy', 'createdBy']
+    const staffRole = ['assignedChef', 'assignedDelivery', 'processedBy', 'assignedWaiter']
       .find((field) => Object.hasOwn(match, field));
     if (!staffRole) return [];
 
@@ -64,7 +64,7 @@ test('menu and staff report totals use paid sales without top-item or staff-attr
     if (staffRole === 'assignedDelivery') {
       return [{ _id: deliveryId, totalOrders: 1, revenue: 20000 }];
     }
-    if (staffRole === 'createdBy') {
+    if (staffRole === 'assignedWaiter') {
       return [{ _id: waiterId, totalOrders: 1, revenue: 58535 }];
     }
     return [];
@@ -101,7 +101,59 @@ test('menu and staff report totals use paid sales without top-item or staff-attr
   assert.equal(itemFacetPipeline.topItems[0].$match.paymentStatus, 'completed');
   assert.equal(itemFacetPipeline.categories[0].$match.paymentStatus, 'completed');
   assert.equal(staffRevenuePipelines.length, 4);
+  assert.ok(staffRevenuePipelines.some(({ staffRole }) => staffRole === 'assignedWaiter'));
+  assert.ok(!staffRevenuePipelines.some(({ staffRole }) => staffRole === 'createdBy'));
   for (const { revenue } of staffRevenuePipelines) {
     assert.equal(revenue.$sum.$cond[0].$eq[1], 'completed');
   }
+});
+
+test('waiter detail uses the same assigned orders as the waiter task page', async (t) => {
+  const originalOrderAggregate = Order.aggregate;
+  const originalOrderFind = Order.find;
+  const originalOrderFindOne = Order.findOne;
+  const originalUserFind = User.find;
+  const originalUserFindById = User.findById;
+  const originalExpenseAggregate = Expense.aggregate;
+  let orderMatch;
+  let firstAssignmentMatch;
+
+  t.after(() => {
+    Order.aggregate = originalOrderAggregate;
+    Order.find = originalOrderFind;
+    Order.findOne = originalOrderFindOne;
+    User.find = originalUserFind;
+    User.findById = originalUserFindById;
+    Expense.aggregate = originalExpenseAggregate;
+  });
+
+  Order.aggregate = async () => [];
+  Order.find = (match) => {
+    orderMatch = match;
+    return {
+      sort() { return this; },
+      limit() { return this; },
+      select() { return this; },
+      lean: async () => []
+    };
+  };
+  Order.findOne = (match) => {
+    firstAssignmentMatch = match;
+    return {
+      sort() { return this; },
+      select() { return this; },
+      lean: async () => null
+    };
+  };
+  User.find = () => ({ lean: async () => [] });
+  User.findById = () => ({
+    lean: async () => ({ _id: 'waiter-id', name: 'Meba', role: 'waiter' })
+  });
+  Expense.aggregate = async () => [];
+
+  await getUnifiedReport({ staffId: 'waiter-id', section: 'staff' });
+
+  assert.equal(orderMatch.assignedWaiter, 'waiter-id');
+  assert.equal(firstAssignmentMatch.assignedWaiter, 'waiter-id');
+  assert.equal(Object.hasOwn(orderMatch, 'createdBy'), false);
 });

@@ -259,19 +259,10 @@ const getStaffPerformance = async (start, end, roleFilter) => {
       }
     ]),
     Order.aggregate([
-      { $match: { ...range, createdBy: { $ne: null } } },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'createdBy',
-          foreignField: '_id',
-          as: 'creator'
-        }
-      },
-      { $match: { 'creator.role': 'waiter' } },
+      { $match: { ...range, assignedWaiter: { $ne: null } } },
       {
         $group: {
-          _id: '$createdBy',
+          _id: '$assignedWaiter',
           totalOrders: { $sum: 1 },
           completed: { $sum: { $cond: [{ $eq: ['$paymentStatus', PAID] }, 1, 0] } },
           cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
@@ -325,7 +316,7 @@ const getStaffPerformance = async (start, end, roleFilter) => {
  *   chef     -> orders the admin assigned via assignedChef
  *   delivery -> orders the admin assigned via assignedDelivery
  *   cashier  -> orders whose payment this person took via processedBy
- *   waiter   -> in-cafe orders this person created via createdBy
+ *   waiter   -> waiter tasks the admin assigned via assignedWaiter
  */
 const getStaffDetail = async (staffId, start, end) => {
   const range = { createdAt: { $gte: start, $lt: end } };
@@ -340,7 +331,7 @@ const getStaffDetail = async (staffId, start, end) => {
     : role === 'delivery'
       ? 'assignedDelivery'
       : role === 'waiter'
-        ? 'createdBy'
+        ? 'assignedWaiter'
         : 'processedBy';
 
   // Aggregation pipelines do not cast string IDs to ObjectIds like Mongoose
