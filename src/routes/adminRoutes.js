@@ -259,6 +259,12 @@ router.post('/orders/:orderId/assign-chef', async (req, res) => {
         orderNumber: order.dailyOrderNumber || order.orderNumber,
         chefName: chef.name
       });
+      io.to('staff-admin').emit('staff-task-assigned', {
+        orderId: order._id,
+        orderNumber: order.dailyOrderNumber || order.orderNumber,
+        role: 'chef',
+        staffName: chef.name
+      });
     }
 
     res.json({
@@ -346,6 +352,12 @@ router.post('/orders/:orderId/assign-delivery', async (req, res) => {
           items: order.items.map(item => ({ name: item.name, quantity: item.quantity })),
           assignedAt: order.assignedAt.delivery
         });
+        io.to('staff-admin').emit('staff-task-assigned', {
+          orderId: order._id,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
+          role: 'delivery',
+          staffName: delivery.name
+        });
       }
 
       io.to('staff-admin').to('staff-cashier').emit('order-updated', {
@@ -417,6 +429,12 @@ router.post('/orders/:orderId/assign-waiter', async (req, res) => {
           orderId: order._id,
           orderNumber: order.dailyOrderNumber || order.orderNumber,
           waiterName: waiter.name
+        });
+        io.to('staff-admin').emit('staff-task-assigned', {
+          orderId: order._id,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
+          role: 'waiter',
+          staffName: waiter.name
         });
       }
       io.to('staff-admin').to('staff-cashier').emit('order-updated', {

@@ -1095,6 +1095,15 @@ router.post('/orders/:orderId/assign-chef',
         .populate('assignedChef', 'name')
         .populate('assignedDelivery', 'name');
 
+      if (io && updated?.assignedChef) {
+        io.to('staff-admin').emit('staff-task-assigned', {
+          orderId: order._id,
+          orderNumber: order.dailyOrderNumber || order.orderNumber,
+          role: 'chef',
+          staffName: updated.assignedChef.name
+        });
+      }
+
       res.json({ success: true, message: 'Chef assigned', order: updated });
     } catch (error) {
       console.error('Assign chef error:', error);
@@ -1159,6 +1168,12 @@ router.post('/orders/:orderId/assign-delivery',
             totalAmount: order.totalAmount,
             items: order.items.map((item) => ({ name: item.name, quantity: item.quantity })),
             assignedAt: order.assignedAt.delivery
+          });
+          io.to('staff-admin').emit('staff-task-assigned', {
+            orderId: order._id,
+            orderNumber: order.dailyOrderNumber || order.orderNumber,
+            role: 'delivery',
+            staffName: delivery.name
           });
         }
         io.to('staff-admin').to('staff-cashier').emit('order-updated', {
@@ -1237,6 +1252,12 @@ router.post('/orders/:orderId/assign-waiter',
             orderId: order._id,
             orderNumber: order.dailyOrderNumber || order.orderNumber,
             waiterName: waiter.name
+          });
+          io.to('staff-admin').emit('staff-task-assigned', {
+            orderId: order._id,
+            orderNumber: order.dailyOrderNumber || order.orderNumber,
+            role: 'waiter',
+            staffName: waiter.name
           });
         }
         io.to('staff-admin').to('staff-cashier').emit('order-updated', {
